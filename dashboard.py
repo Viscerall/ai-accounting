@@ -1,16 +1,45 @@
 """Streamlit dashboard — AI Accounting untuk kafe."""
 from __future__ import annotations
 import json
+import traceback
 import uuid
 from decimal import Decimal
 from pathlib import Path
+
 import pandas as pd
 import streamlit as st
-from app.calculator import calculate
-from app.auth import require_login
-from app.config import settings, db_label
-from app.db import get_conn, get_stats, ingest_transaction, list_branches, list_coa_rows, list_drafts, recompute_draft, reset_all, set_draft_status
-from app.mapping_rules import MappingError
+
+# Import modul app di dalam try/except supaya kalau import gagal (mis. psycopg
+# belum terinstall / tabel belum ada / kode lama belum migrasi), kita tetap
+# menampilkan pesan error yang informatif di UI — bukan ImportError pink
+# generik dari Streamlit.
+try:
+    from app.calculator import calculate
+    from app.auth import require_login
+    from app.config import settings, db_label
+    from app.db import (
+        get_conn,
+        get_stats,
+        ingest_transaction,
+        list_branches,
+        list_coa_rows,
+        list_drafts,
+        recompute_draft,
+        reset_all,
+        set_draft_status,
+    )
+    from app.mapping_rules import MappingError
+except Exception:  # noqa: BLE001
+    import sys
+
+    _import_error = traceback.format_exc()
+    st.title("AI Accounting — import gagal")
+    st.error(
+        "Modul app gagal diimpor. Detail (kirim ini ke developer): "
+        + _import_error
+    )
+    st.code(_import_error, language="python")
+    st.stop()
 
 SAMPLE_DIR = Path(__file__).parent / "data" / "samples"
 REVIEWER = "nizar"
