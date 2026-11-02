@@ -96,17 +96,31 @@ def list_branches(active_only: bool = False) -> list[dict]:
 
 
 def resolve_branch_id(cur, branch_code: str | None) -> int:
-    """Kode cabang -> id. Fallback ke PUSAT (dibuat otomatis kalau belum ada)."""
+    """Kode cabang -> id.
+
+    Kalau `branch_code` kosong: pakai PUSAT (kalau ada) atau cabang aktif pertama.
+    Kalau `branch_code` diisi tapi tidak dikenal: raise ValueError — supaya data
+    tidak diam-diam masuk ke cabang yang salah setelah cabang di-rename.
+    """
     if not _has_branches_table():
         # Legacy database without branches table; rely on the column default 1
         return 1
-    code = (branch_code or "PUSAT").strip().upper()
+    code = (branch_code or "").strip().upper()
     try:
-        cur.execute("SELECT id FROM branches WHERE branch_code = %(code)s", {"code": code})
+        if code:
+            cur.execute("SELECT id FROM branches WHERE branch_code = %(code)s", {"code": code})
+            row = cur.fetchone()
+            if row:
+                return row["id"]
+            cur.execute("SELECT branch_code FROM branches ORDER BY id")
+            known = ", ".join(r["branch_code"] for r in cur.fetchall()) or "belum ada"
+            raise ValueError(f"Cabang '{code}' tidak dikenal. Pilihan: {known}.")
+        # Tanpa kode: PUSAT kalau ada, kalau tidak cabang aktif pertama
+        cur.execute("SELECT id FROM branches WHERE branch_code = 'PUSAT'")
         row = cur.fetchone()
         if row:
             return row["id"]
-        cur.execute("SELECT id FROM branches WHERE branch_code = 'PUSAT'")
+        cur.execute("SELECT id FROM branches WHERE is_active ORDER BY id LIMIT 1")
         row = cur.fetchone()
         if row:
             return row["id"]
@@ -116,11 +130,105 @@ def resolve_branch_id(cur, branch_code: str | None) -> int:
         )
         cur.execute("SELECT id FROM branches WHERE branch_code = 'PUSAT'")
         return cur.fetchone()["id"]
+    except ValueError:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise ValueError(
             "Tabel `branches` belum ada di database ini. "
             "Jalankan sql/003_branches.sql (lokal) atau paste supabase_setup.sql di Supabase SQL Editor."
         ) from exc
+
+
+_BRANCH_COLS = "id, branch_code, branch_name, city, address, phone, is_active"
+
+
+def branch_usage(branch_id: int) -> dict:
+    """Berapa transaksi & draft yang menempel di satu cabang (buat safety check)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT (SELECT COUNT(*) FROM raw_transactions WHERE branch_id = %(id)s) AS raw_transactions,
+                       (SELECT COUNT(*) FROM journal_drafts   WHERE branch_id = %(id)s) AS drafts
+                """,
+                {"id": branch_id},
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Cabang id {branch_id} tidak ditemukan.")
+            return dict(row)
+
+
+def create_branch(branch_code: str, branch_name: str, city: str | None = None) -> dict:
+    """Tambah cabang baru. Kode & nama wajib."""
+    code = (branch_code or "").strip().upper().replace(" ", "-")
+    name = (branch_name or "").strip()
+    if not code or not name:
+        raise ValueError("Kode dan nama cabang wajib diisi.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "INSERT INTO branches (branch_code, branch_name, city) "
+                    "VALUES (%(code)s, %(name)s, %(city)s) RETURNING " + _BRANCH_COLS
+                ),
+                {"code": code, "name": name, "city": (city or "").strip() or None},
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise RuntimeError("Gagal membuat cabang (tidak ada row kembali).")
+            return dict(row)
+
+
+def update_branch(
+    branch_id: int,
+    *,
+    branch_code: str | None = None,
+    branch_name: str | None = None,
+    city: str | None = None,
+    is_active: bool | None = None,
+) -> dict:
+    """Edit cabang (rename kode/nama/kota, aktif-nonaktif). Field None = tidak diubah."""
+    params = {
+        "id": branch_id,
+        "code": (branch_code or "").strip().upper().replace(" ", "-") or None,
+        "name": (branch_name or "").strip() or None,
+        "city": (city or "").strip() or None,
+        "active": is_active,
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    """
+                    UPDATE branches SET
+                        branch_code = COALESCE(%(code)s, branch_code),
+                        branch_name = COALESCE(%(name)s, branch_name),
+                        city        = COALESCE(%(city)s, city),
+                        is_active   = COALESCE(%(active)s, is_active)
+                    WHERE id = %(id)s
+                    RETURNING """
+                    + _BRANCH_COLS
+                ),
+                params,
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"Cabang id {branch_id} tidak ditemukan.")
+            return dict(row)
+
+
+def delete_branch(branch_id: int) -> None:
+    """Hapus cabang — ditolak kalau masih punya transaksi/draft (data historis aman)."""
+    usage = branch_usage(branch_id)
+    if usage["raw_transactions"] or usage["drafts"]:
+        raise ValueError(
+            f"Cabang ini masih punya {usage['raw_transactions']} transaksi & "
+            f"{usage['drafts']} draft. Nonaktifkan saja daripada dihapus."
+        )
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM branches WHERE id = %(id)s", {"id": branch_id})
 
 
 

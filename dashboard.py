@@ -18,6 +18,9 @@ try:
     from app.auth import require_login
     from app.config import settings, db_label
     from app.db import (
+        branch_usage,
+        create_branch,
+        delete_branch,
         get_conn,
         get_stats,
         ingest_transaction,
@@ -27,6 +30,7 @@ try:
         recompute_draft,
         reset_all,
         set_draft_status,
+        update_branch,
     )
     from app.mapping_rules import MappingError
 except Exception:  # noqa: BLE001
@@ -156,9 +160,13 @@ def page_utils():
     st.markdown("---")
     st.markdown("#### Upload JSON manual")
     uploaded = st.file_uploader("File JSON transaksi Accurate POS", type=["json"])
-    branch_opt = ["PUSAT"] + [f"{b['branch_code']}" for b in list_branches(active_only=True)] if list_branches() else ["PUSAT"]
-    sel_branch = st.selectbox("🏪 Cabang target", branch_opt)
-    if uploaded and st.button("Ingest upload"):
+    branch_opt = [b["branch_code"] for b in list_branches(active_only=True)]
+    if branch_opt:
+        sel_branch = st.selectbox("🏪 Cabang target", branch_opt, help="Cabang tujuan penyimpanan transaksi.")
+    else:
+        sel_branch = None
+        st.caption("Belum ada cabang aktif — tambah dulu di tab **🏪 Kelola Cabang**.")
+    if uploaded and st.button("Ingest upload", disabled=not sel_branch):
         try:
             payload = json.loads(uploaded.read().decode("utf-8"))
             payload["branch_code"] = sel_branch
@@ -219,6 +227,98 @@ def page_utils():
         st.rerun()
 
 
+def _branch_error(exc: Exception) -> str:
+    """Ubah error DB jadi pesan yang bisa dibaca user."""
+    text = str(exc)
+    if "duplicate key" in text or "unique constraint" in text:
+        return "Kode cabang itu sudah dipakai — pilih kode lain."
+    if "foreign key" in text:
+        return "Cabang ini masih dipakai data lain, jadi tidak bisa dihapus."
+    return text
+
+
+def page_branches():
+    st.markdown("#### Daftar cabang")
+    rows = list_branches()
+    if not rows:
+        st.warning("Tabel `branches` belum ada di DB ini. Jalankan `sql/003_branches.sql` (lokal) atau `sql/supabase_setup.sql` (Supabase) dulu.")
+        return
+
+    table = []
+    for b in rows:
+        usage = branch_usage(b["id"])
+        table.append(
+            {
+                "Kode": b["branch_code"],
+                "Nama": b["branch_name"],
+                "Kota": b["city"] or "—",
+                "Aktif": "✅" if b["is_active"] else "⛔",
+                "Transaksi": usage["raw_transactions"],
+                "Draft": usage["drafts"],
+            }
+        )
+    st.dataframe(pd.DataFrame(table), hide_index=True, width="stretch")
+    st.caption("Kode dipakai di payload JSON & filter. Nama dan kota yang tampil di dashboard dan file Excel.")
+
+    st.markdown("---")
+    st.markdown("#### ➕ Tambah cabang")
+    with st.form("add-branch", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        new_code = c1.text_input("Kode", placeholder="GALAXY")
+        new_name = c2.text_input("Nama", placeholder="Galaxy")
+        new_city = c3.text_input("Kota", placeholder="Bekasi")
+        if st.form_submit_button("Tambah cabang", type="primary"):
+            try:
+                created = create_branch(new_code, new_name, new_city)
+                st.success(f"Cabang **{created['branch_code']}** ditambahkan.")
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Gagal: {_branch_error(exc)}")
+
+    st.markdown("---")
+    st.markdown("#### ✏️ Edit / rename cabang")
+    labels = {f"{b['branch_code']} — {b['branch_name']}": b for b in rows}
+    picked = st.selectbox("Pilih cabang", list(labels), key="branch-edit-pick")
+    target = labels[picked]
+    usage = branch_usage(target["id"])
+
+    with st.form(f"edit-branch-{target['id']}"):
+        c1, c2, c3 = st.columns(3)
+        edit_code = c1.text_input("Kode", value=target["branch_code"])
+        edit_name = c2.text_input("Nama", value=target["branch_name"])
+        edit_city = c3.text_input("Kota", value=target["city"] or "")
+        edit_active = st.checkbox("Aktif (muncul di filter & pilihan upload)", value=bool(target["is_active"]))
+        if st.form_submit_button("Simpan perubahan", type="primary"):
+            try:
+                updated = update_branch(
+                    target["id"],
+                    branch_code=edit_code,
+                    branch_name=edit_name,
+                    city=edit_city,
+                    is_active=edit_active,
+                )
+                st.success(f"Tersimpan: **{updated['branch_code']} — {updated['branch_name']}** ({updated['city'] or '—'})")
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Gagal: {_branch_error(exc)}")
+
+    st.caption(
+        f"Cabang ini punya **{usage['raw_transactions']} transaksi** dan **{usage['drafts']} draft**. "
+        "Rename hanya mengganti label — data lama tetap menempel ke cabang yang sama."
+    )
+
+    with st.expander("🗑️ Hapus cabang"):
+        st.caption("Hanya cabang kosong (tanpa transaksi/draft) yang bisa dihapus. Kalau sudah ada data, nonaktifkan saja.")
+        confirm = st.checkbox("Saya yakin ingin menghapus cabang ini", key=f"del-chk-{target['id']}")
+        if st.button("Hapus cabang", key=f"del-btn-{target['id']}", disabled=not confirm):
+            try:
+                delete_branch(target["id"])
+                st.success(f"Cabang **{target['branch_code']}** dihapus.")
+                st.rerun()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Gagal: {_branch_error(exc)}")
+
+
 def main():
     require_login()
     ok, error = db_check()
@@ -234,9 +334,16 @@ def main():
     # ── Pilih cabang (filter global) ──
     branches = list_branches()
     if branches:
-        branch_options = ["Semua cabang"] + [f"{b['branch_code']} — {b['branch_name']}" for b in branches]
-        picked_branch = st.selectbox("🏪 Cabang", branch_options, label_visibility="collapsed")
-        branch_code = None if picked_branch == "Semua cabang" else picked_branch.split(" — ")[0]
+        branch_map = {"Semua cabang": None}
+        for b in branches:
+            label = f"{b['branch_code']} — {b['branch_name']}"
+            if b["city"]:
+                label += f" · {b['city']}"
+            if not b["is_active"]:
+                label += " (nonaktif)"
+            branch_map[label] = b["branch_code"]
+        picked_branch = st.selectbox("🏪 Cabang", list(branch_map), label_visibility="collapsed")
+        branch_code = branch_map[picked_branch]
         stats = get_stats(branch_code)
     else:
         branch_code = None
@@ -250,13 +357,15 @@ def main():
     cols[4].metric("🔄 Synced", stats["synced"])
     cols[5].metric("Turnover", rp(stats["turnover"]))
     st.markdown("---")
-    tab1, tab2, tab3 = st.tabs(["📋 Review Draft", "📚 COA", "🛠 Demo & Utils"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 Review Draft", "📚 COA", "🛠 Demo & Utils", "🏪 Kelola Cabang"])
     with tab1:
         page_drafts(branch_code=branch_code)
     with tab2:
         page_coa()
     with tab3:
         page_utils()
+    with tab4:
+        page_branches()
     st.sidebar.markdown("### Accurate Online")
     st.sidebar.warning("⛔ Push belum aktif — API Accurate Online belum diberikan.")
     st.sidebar.button("🚀 Push ke Accurate Online", disabled=True, width="stretch")
