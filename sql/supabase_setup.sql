@@ -114,6 +114,25 @@ create table if not exists audit_log (
 );
 
 -- ------------------------------------------------------------
+-- ROW LEVEL SECURITY
+-- Supabase mengekspos schema `public` lewat REST API (PostgREST) dengan
+-- `anon` key yang publik. Tanpa RLS, siapa pun bisa baca/tulis tabel ini
+-- tanpa password dashboard.
+--
+-- RLS aktif + tanpa policy = tolak semua akses lewat anon/authenticated key.
+-- App kita TIDAK terpengaruh: dia konek via connection string sebagai role
+-- `postgres` (pemilik tabel), dan pemilik tabel otomatis bypass RLS
+-- (selama tidak di-FORCE). Jadi aman: API publik tertutup, app tetap jalan.
+-- ------------------------------------------------------------
+alter table chart_of_accounts  enable row level security;
+alter table raw_transactions   enable row level security;
+alter table journal_drafts     enable row level security;
+alter table journal_draft_items enable row level security;
+alter table raw_bank_statements enable row level security;
+alter table daily_cash_counts  enable row level security;
+alter table audit_log          enable row level security;
+
+-- ------------------------------------------------------------
 -- Indexes
 -- ------------------------------------------------------------
 create index if not exists idx_raw_transactions_status on raw_transactions(status);
