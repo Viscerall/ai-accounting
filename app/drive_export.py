@@ -153,7 +153,7 @@ def make_excel(drafts: list[dict], out_path: Path) -> None:
 
     # ── Sheet 2: Daftar Draft ──
     ws2 = wb.create_sheet("Daftar Draft")
-    h2 = ["Draft No", "Invoice", "Tanggal", "Status", "Total Debit", "Total Kredit", "Baris Jurnal"]
+    h2 = ["Draft No", "Invoice", "Cabang", "Tanggal", "Status", "Total Debit", "Total Kredit", "Baris Jurnal"]
     for i, h in enumerate(h2, 1):
         ws2.cell(row=1, column=i, value=h)
     style_header_row(ws2, 1, len(h2))
@@ -161,12 +161,13 @@ def make_excel(drafts: list[dict], out_path: Path) -> None:
     for r, d in enumerate(drafts, 2):
         ws2.cell(row=r, column=1, value=d["draft_no"])
         ws2.cell(row=r, column=2, value=d["external_id"])
-        ws2.cell(row=r, column=3, value=str(d["business_date"]))
-        ws2.cell(row=r, column=4, value=d["status"])
-        style_data_cell(ws2, r, 5, True).value = float(d["total_debit"])
-        style_data_cell(ws2, r, 6, True).value = float(d["total_credit"])
-        ws2.cell(row=r, column=7, value=len(d.get("items", [])))
-        for c in range(1, 8):
+        ws2.cell(row=r, column=3, value=d.get("branch_code", "PUSAT"))
+        ws2.cell(row=r, column=4, value=str(d["business_date"]))
+        ws2.cell(row=r, column=5, value=d["status"])
+        style_data_cell(ws2, r, 6, True).value = float(d["total_debit"])
+        style_data_cell(ws2, r, 7, True).value = float(d["total_credit"])
+        ws2.cell(row=r, column=8, value=len(d.get("items", [])))
+        for c in range(1, 9):
             ws2.cell(row=r, column=c).border = BORDER
 
     auto_width(ws2)
@@ -177,7 +178,7 @@ def make_excel(drafts: list[dict], out_path: Path) -> None:
         safe = d["draft_no"].replace("/", "-")
         ws3 = wb.create_sheet(safe[:31])
         ws3.cell(row=1, column=1, value=f"{d['draft_no']} — {d['external_id']}").font = TITLE_FONT
-        ws3.cell(row=2, column=1, value=f"Tanggal: {d['business_date']} · Status: {d['status']}").font = SUB_FONT
+        ws3.cell(row=2, column=1, value=f"Cabang: {d.get('branch_code', 'PUSAT')} · Tanggal: {d['business_date']} · Status: {d['status']}").font = SUB_FONT
 
         h3 = ["#", "Kode Akun", "Nama Akun", "Debit", "Kredit", "Keterangan"]
         for i, h in enumerate(h3, 1):
@@ -284,7 +285,8 @@ def export_to_drive(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / "weekly.xlsx"
         make_excel(drafts, tmp_path)
-        fname = f"AI_Acc_Weekly_{date.today().isoformat()}.xlsx"
+        iso_year, iso_week, _ = date.today().isocalendar()
+        fname = f"AI_ACC_WEEKLY_{iso_year}-W{iso_week:02d}.xlsx"
         res = upload_excel(tmp_path, name=fname)
         return {
             "status": "uploaded",

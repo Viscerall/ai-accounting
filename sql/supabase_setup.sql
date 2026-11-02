@@ -24,14 +24,30 @@ create table if not exists chart_of_accounts (
 );
 
 -- ------------------------------------------------------------
+-- 1b. BRANCHES (konteks multi-cabang kafe)
+-- ------------------------------------------------------------
+create table if not exists branches (
+  id bigserial primary key,
+  branch_code text unique not null check (char_length(branch_code) <= 20),
+  branch_name text not null check (char_length(branch_name) <= 100),
+  city text,
+  address text,
+  phone text,
+  opened_at date,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- ------------------------------------------------------------
 -- 2. RAW TRANSACTIONS (Staging)
 -- ------------------------------------------------------------
 create table if not exists raw_transactions (
   id bigserial primary key,
   source text not null default 'accurate_pos',
-  external_id text unique not null,   -- invoice number / POS reference
+  external_id text not null,   -- invoice number / POS reference
+  branch_id bigint references branches(id) on delete restrict,
   business_date date not null,
-  payload jsonb not null,             -- original transaction payload
+  payload jsonb not null,       -- original transaction payload
   status text not null default 'RECEIVED' check (status in ('RECEIVED','CALCULATED','DRAFTED','APPROVED','SYNCED','REJECTED','ERROR')),
   ingested_at timestamptz not null default now(),
   error_message text
@@ -43,6 +59,7 @@ create table if not exists raw_transactions (
 create table if not exists journal_drafts (
   id bigserial primary key,
   raw_transaction_id bigint not null references raw_transactions(id) on delete cascade,
+  branch_id bigint references branches(id) on delete restrict,
   draft_no text unique not null,
   journal_date date not null default (current_date),
   memo text,
@@ -78,6 +95,7 @@ create table if not exists journal_draft_items (
 create table if not exists raw_bank_statements (
   id bigserial primary key,
   bank_account text not null,
+  branch_id bigint references branches(id) on delete restrict,
   statement_date date not null,
   amount numeric(18,2) not null,
   description text,
@@ -88,6 +106,7 @@ create table if not exists raw_bank_statements (
 
 create table if not exists daily_cash_counts (
   id bigserial primary key,
+  branch_id bigint references branches(id) on delete restrict,
   close_date date not null,
   shift_type text not null,           -- 'MORNING','DAY','NIGHT'
   cashier text not null,
@@ -96,7 +115,7 @@ create table if not exists daily_cash_counts (
   difference numeric(18,2),
   remarks text,
   created_at timestamptz not null default now(),
-  unique (close_date, shift_type, cashier)
+  unique (branch_id, close_date, shift_type, cashier)
 );
 
 -- ------------------------------------------------------------
@@ -125,6 +144,7 @@ create table if not exists audit_log (
 -- (selama tidak di-FORCE). Jadi aman: API publik tertutup, app tetap jalan.
 -- ------------------------------------------------------------
 alter table chart_of_accounts  enable row level security;
+alter table branches              enable row level security;
 alter table raw_transactions   enable row level security;
 alter table journal_drafts     enable row level security;
 alter table journal_draft_items enable row level security;
@@ -140,6 +160,11 @@ create index if not exists idx_raw_transactions_business_date on raw_transaction
 create index if not exists idx_journal_drafts_status on journal_drafts(status);
 create index if not exists idx_journal_draft_items_draft_id on journal_draft_items(journal_draft_id);
 create index if not exists idx_audit_log_created_at on audit_log(created_at);
+-- Multi-cabang indexes
+create index if not exists idx_raw_transactions_branch_id on raw_transactions(branch_id);
+create index if not exists idx_journal_drafts_branch_id on journal_drafts(branch_id);
+create index if not exists idx_daily_cash_counts_branch_id on daily_cash_counts(branch_id);
+create index if not exists idx_raw_bank_statements_branch_id on raw_bank_statements(branch_id);
 
 -- ------------------------------------------------------------
 -- SEED: Chart of Accounts (kafe / restoran)
@@ -165,12 +190,57 @@ insert into chart_of_accounts (account_code, account_name, account_type, normal_
 on conflict (account_code) do nothing;
 
 -- ------------------------------------------------------------
--- VERIFIKASI: harus menampilkan 6 tabel dan 16 akun COA
+-- SEED: Cabang kafe (multi-cabang)
+-- Default 2 cabang. Tambah cabang baru: insert ke tabel `branches`.
+-- Contoh: insert into branches (branch_code, branch_name, city)
+--         values ('CAB3', 'Cabang Bandung', 'Bandung');
+-- ------------------------------------------------------------
+insert into branches (branch_code, branch_name, city, opened_at, is_active) values
+  ('PUSAT', 'Cabang Utama', 'Bogor',   '2026-11-01', true),
+  ('CAB2',  'Cabang 2',     'Jakarta', '2026-11-01', true)
+on conflict (branch_code) do nothing;
+
+-- ------------------------------------------------------------
+-- MIGRASI AMAN MULTI-CABANG (idempotent: aman untuk DB baru & DB lama)
+--  1. tambah kolom branch_id ke tabel transaksi
+--  2. default otomatis ke cabang PUSAT
+--  3. data lama (branch_id NULL) dipindah ke PUSAT
+--  4. nomor invoice unik PER CABANG (bukan global) — cabang berbeda
+--     boleh punya nomor invoice yang sama
+-- ------------------------------------------------------------
+do $$
+declare
+  pusat_id bigint;
+  tbl text;
+begin
+  select id into pusat_id from branches where branch_code = 'PUSAT';
+
+  foreach tbl in array array['raw_transactions','journal_drafts','raw_bank_statements','daily_cash_counts']
+  loop
+    execute format('alter table %I add column if not exists branch_id bigint references branches(id) on delete restrict', tbl);
+    execute format('alter table %I alter column branch_id set default %s', tbl, pusat_id);
+    execute format('update %I set branch_id = %s where branch_id is null', tbl, pusat_id);
+  end loop;
+
+  alter table raw_transactions drop constraint if exists raw_transactions_external_id_key;
+  create unique index if not exists uq_raw_transactions_branch_external_id
+    on raw_transactions (branch_id, external_id);
+
+  alter table daily_cash_counts drop constraint if exists daily_cash_counts_close_date_shift_type_cashier_key;
+  create unique index if not exists uq_daily_cash_counts_branch_shift
+    on daily_cash_counts (branch_id, close_date, shift_type, cashier);
+end $$;
+
+-- ------------------------------------------------------------
+-- VERIFIKASI: 8 tabel, 16 akun COA, 2 cabang
 -- ------------------------------------------------------------
 select 'tabel' as jenis, count(*)::text as jumlah
 from information_schema.tables
 where table_schema = 'public'
   and table_name in ('chart_of_accounts','raw_transactions','journal_drafts',
-                     'journal_draft_items','raw_bank_statements','daily_cash_counts','audit_log')
+                     'journal_draft_items','raw_bank_statements','daily_cash_counts',
+                     'audit_log','branches')
 union all
-select 'coa', count(*)::text from chart_of_accounts;
+select 'coa', count(*)::text from chart_of_accounts
+union all
+select 'cabang (' || string_agg(branch_code, ', ' order by branch_code) || ')', count(*)::text from branches;

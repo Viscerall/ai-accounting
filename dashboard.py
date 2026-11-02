@@ -9,7 +9,7 @@ import streamlit as st
 from app.calculator import calculate
 from app.auth import require_login
 from app.config import settings, db_label
-from app.db import get_conn, get_stats, ingest_transaction, list_coa_rows, list_drafts, recompute_draft, reset_all, set_draft_status
+from app.db import get_conn, get_stats, ingest_transaction, list_branches, list_coa_rows, list_drafts, recompute_draft, reset_all, set_draft_status
 from app.mapping_rules import MappingError
 
 SAMPLE_DIR = Path(__file__).parent / "data" / "samples"
@@ -47,8 +47,9 @@ def load_samples():
 
 def render_detail(draft: dict):
     icon, color = BADGE.get(draft["status"], ("❓", "#eee"))
+    branch_label = f"{draft.get('branch_code', 'PUSAT')} · {draft.get('branch_name', 'Cabang Utama')}"
     st.markdown(f"### {draft['draft_no']} <span class='badge' style='background:{color}'>{icon} {draft['status']}</span>", unsafe_allow_html=True)
-    st.caption(f"Invoice **{draft['external_id']}** · tanggal **{draft['business_date']}** · engine `{draft.get('ai_model')}` · confidence `{draft.get('confidence')}`")
+    st.caption(f"Invoice **{draft['external_id']}** · tanggal **{draft['business_date']}** · cabang **{branch_label}** · engine `{draft.get('ai_model')}` · confidence `{draft.get('confidence')}`")
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Debit", rp(draft["total_debit"]))
     c2.metric("Total Kredit", rp(draft["total_credit"]))
@@ -82,13 +83,13 @@ def render_detail(draft: dict):
         st.rerun()
 
 
-def page_drafts():
+def page_drafts(branch_code: str | None = None):
     picked = st.radio("Filter status", ["Semua", "PENDING", "APPROVED", "REJECTED", "SYNCED"], horizontal=True, label_visibility="collapsed")
-    rows = list_drafts(None if picked == "Semua" else picked, 500)
+    rows = list_drafts(None if picked == "Semua" else picked, 500, branch_code=branch_code)
     if not rows:
         st.info("Belum ada draft. Buka tab Demo & Utils untuk load contoh.")
         return
-    frame = pd.DataFrame([{"id": r["id"], "Draft": r["draft_no"], "Invoice": r["external_id"], "Tanggal": str(r["business_date"]), "Status": r["status"], "Nilai": rp(r["total_debit"]), "Baris": len(r.get("items") or []), "Reviewer": r["reviewed_by"] or "-"} for r in rows])
+    frame = pd.DataFrame([{"id": r["id"], "Draft": r["draft_no"], "Invoice": r["external_id"], "Cabang": r.get("branch_code", "-"), "Tanggal": str(r["business_date"]), "Status": r["status"], "Nilai": rp(r["total_debit"]), "Baris": len(r.get("items") or []), "Reviewer": r["reviewed_by"] or "-"} for r in rows])
     st.metric("Jumlah draft", len(rows))
     st.dataframe(frame.drop(columns=["id"]), hide_index=True, width="stretch")
     choices = {f"{r['draft_no']} · {r['external_id']} · {rp(r['total_debit'])}": r["id"] for r in rows}
@@ -126,10 +127,14 @@ def page_utils():
     st.markdown("---")
     st.markdown("#### Upload JSON manual")
     uploaded = st.file_uploader("File JSON transaksi Accurate POS", type=["json"])
+    branch_opt = ["PUSAT"] + [f"{b['branch_code']}" for b in list_branches(active_only=True)] if list_branches() else ["PUSAT"]
+    sel_branch = st.selectbox("🏪 Cabang target", branch_opt)
     if uploaded and st.button("Ingest upload"):
         try:
-            raw_id, draft_id = ingest_transaction(json.loads(uploaded.read().decode("utf-8")))
-            st.success(f"Masuk: raw_id={raw_id}, draft_id={draft_id}")
+            payload = json.loads(uploaded.read().decode("utf-8"))
+            payload["branch_code"] = sel_branch
+            raw_id, draft_id = ingest_transaction(payload)
+            st.success(f"Masuk: raw_id={raw_id}, draft_id={draft_id} (cabang {sel_branch})")
             st.rerun()
         except (ValueError, MappingError, json.JSONDecodeError) as exc:
             st.error(f"Gagal: {exc}")
@@ -196,6 +201,18 @@ def main():
     stats = get_stats()
     st.title("🧾 AI Accounting — Dashboard Review Jurnal")
     st.caption(f"Deterministic rules engine · DB `{db_label()}`")
+
+    # ── Pilih cabang (filter global) ──
+    branches = list_branches()
+    if branches:
+        branch_options = ["Semua cabang"] + [f"{b['branch_code']} — {b['branch_name']}" for b in branches]
+        picked_branch = st.selectbox("🏪 Cabang", branch_options, label_visibility="collapsed")
+        branch_code = None if picked_branch == "Semua cabang" else picked_branch.split(" — ")[0]
+        stats = get_stats(branch_code)
+    else:
+        branch_code = None
+        st.info("Tabel `branches` belum ada di DB ini — filter cabang nonaktif. Jalankan `sql/003_branches.sql` untuk multi-cabang.")
+
     cols = st.columns(6)
     cols[0].metric("Raw transaksi", stats["raw_transactions"])
     cols[1].metric("⏳ Pending", stats["pending"])
@@ -206,7 +223,7 @@ def main():
     st.markdown("---")
     tab1, tab2, tab3 = st.tabs(["📋 Review Draft", "📚 COA", "🛠 Demo & Utils"])
     with tab1:
-        page_drafts()
+        page_drafts(branch_code=branch_code)
     with tab2:
         page_coa()
     with tab3:
