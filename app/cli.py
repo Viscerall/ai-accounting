@@ -54,7 +54,7 @@ def demo_reset():
     print("✅ Semua transaction & draft dihapus.")
 
 
-def approve_draft(draft_id: int, reviewer: str = "nizar"):
+def approve_draft(draft_id: int, reviewer: str = "Tim Dawend"):
     """Approve atau Reject satu draft."""
     status = input("Apakah APPROVED atau REJECTED? [APPROVED]: ").strip().upper()
     status = status or "APPROVED"

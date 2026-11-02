@@ -48,22 +48,32 @@ def logout() -> None:
     st.session_state.pop(_USERNAME_KEY, None)
 
 
-def require_login() -> None:
+def require_login() -> str:
     """Tampilkan halaman login sampai user berhasil masuk.
 
-    Return None kalau sudah login (dashborad lanjut render).
+    Returns username (string) kalau sudah login (dashboard lanjut render).
     Memanggil ``st.stop()`` kalau belum login.
     """
     if is_logged_in():
         _render_logout_sidebar()
-        return
+        return st.session_state.get(_USERNAME_KEY, "Tim Dawend")
 
     expected = _secret("APP_PASSWORD")
 
-    _, col, _ = st.columns([1, 1.4, 1])
-    with col:
-        st.markdown("## ◧ Dawend")
-        st.caption("Dawend · Area terbatas — masukkan password untuk melanjutkan.")
+    with st.container(key="login"):
+        st.markdown(
+            '<div class="brand"><div class="mark">D</div>'
+            '<div><div class="name">Dawend</div>'
+            '<div class="scope">Accounting Dashboard</div></div></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="login-h">Masuk</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="login-p">Dashboard kolaboratif untuk review jurnal dan '
+            "operasional tim Dawend. Isi nama kamu supaya setiap approve / reject "
+            "tercatat atas nama yang benar.</p>",
+            unsafe_allow_html=True,
+        )
 
         if not expected:
             st.error(
@@ -74,19 +84,26 @@ def require_login() -> None:
             )
             st.stop()
 
-        with st.form("login_form", clear_on_submit=False):
+        with st.form("login_form", border=False, clear_on_submit=False):
+            name = st.text_input("Nama", placeholder="Nama kamu", autocomplete="name")
             password = st.text_input("Password", type="password", autocomplete="current-password")
-            submitted = st.form_submit_button("Masuk", use_container_width=True, type="primary")
+            submitted = st.form_submit_button("Masuk", type="primary", width="stretch")
 
         if submitted:
-            if check_password(password, expected):
+            if not name.strip():
+                st.error("Isi nama kamu dulu.")
+            elif check_password(password, expected):
                 st.session_state[_SESSION_KEY] = True
-                st.session_state[_USERNAME_KEY] = "nizar"
+                st.session_state[_USERNAME_KEY] = name.strip()
                 st.rerun()
             else:
                 st.error("Password salah.")
 
-        st.caption("Akses hanya untuk pemilik. Semua aktivitas review tercatat atas nama `nizar`.")
+        st.markdown(
+            '<p class="login-f">Akses terbatas untuk tim Dawend. '
+            "Hubungi admin kalau butuh akses.</p>",
+            unsafe_allow_html=True,
+        )
 
     st.stop()
 
@@ -94,7 +111,7 @@ def require_login() -> None:
 def _render_logout_sidebar() -> None:
     with st.sidebar:
         st.divider()
-        st.caption(f"Masuk sebagai **{st.session_state.get(_USERNAME_KEY, 'nizar')}**")
+        st.caption(f"Masuk sebagai **{st.session_state.get(_USERNAME_KEY, 'Tim Dawend')}**")
         if st.button("🚪 Logout", use_container_width=True):
             logout()
             st.rerun()

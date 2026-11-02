@@ -26,7 +26,7 @@ st.set_page_config(
 # ── imports (fail closed, show the traceback) ───────────────────────────────
 try:
     from app.calculator import calculate
-    from app.auth import check_password, logout
+    from app.auth import check_password, logout, require_login
     from app.config import db_label
     from app.db import (
         branch_usage,
@@ -52,7 +52,7 @@ except Exception:  # noqa: BLE001
     st.stop()
 
 SAMPLE_DIR = Path(__file__).parent / "data" / "samples"
-REVIEWER = "nizar"
+REVIEWER = "Tim Dawend"
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -189,9 +189,12 @@ code, .mono{ font-variant-numeric:tabular-nums; }
 
 /* ── sidebar footer ── */
 .side-foot{ margin-top:22px; padding-top:14px; border-top:1px solid var(--rule); }
-.side-foot .kv{ display:flex; justify-content:space-between; font-size:12px; line-height:1.9; }
-.side-foot .k{ color:var(--muted); }
-.side-foot .v{ color:var(--text); }
+.side-foot .kv{ display:flex; justify-content:space-between; gap:12px; font-size:12px; line-height:1.9; }
+.side-foot .k{ color:var(--muted); flex:0 0 auto; }
+.side-foot .v{
+  color:var(--text); text-align:right; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;
+}
 .side-foot .dot{ color:var(--positive); }
 
 [data-testid="stSidebar"] .stButton button{
@@ -311,6 +314,26 @@ table.jt td.n, table.plain td.n, table.jt th.n, table.plain th.n{
 }
 table.jt td.n{ font-weight:500; }
 table.jt tbody tr:hover td{ background:var(--ground); }
+table.jt tfoot td{
+  font-size:13px; font-weight:500; padding:11px 12px;
+  border-top:1px solid var(--border); border-bottom:0; background:var(--surface);
+}
+table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
+.jt-wrap{ width:100%; overflow-x:auto; margin-top:16px; }
+.jt-wrap table.jt{ min-width:620px; }
+table.jt td.desc{ color:var(--muted); white-space:normal; min-width:210px; }
+
+/* totals strip above the table: always visible, no scrolling needed */
+.totals{
+  display:flex; flex-wrap:wrap; gap:0; margin:18px 0 2px;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r-card);
+  overflow:hidden;
+}
+.totals .cell{ flex:1 1 0; min-width:150px; padding:12px 16px; border-right:1px solid var(--rule); }
+.totals .cell:last-child{ border-right:0; }
+.totals .lab{ font-size:12px; color:var(--muted); margin-bottom:4px; }
+.totals .val{ font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
+.totals .state{ display:flex; align-items:center; gap:8px; }
 table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
 
 /* ── panels for forms / secondary blocks ── */
@@ -400,40 +423,6 @@ def inject_css() -> None:
     st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
 
-# ── login ───────────────────────────────────────────────────────────────────
-def render_login() -> None:
-    expected = None
-    try:
-        expected = st.secrets["APP_PASSWORD"]
-    except Exception:  # noqa: BLE001
-        expected = os.environ.get("APP_PASSWORD")
-
-    with st.container(key="login"):
-        st.markdown(
-            '<div class="brand"><div class="mark">A</div>'
-            '<div><div class="name">Dawend</div>'
-            '<div class="scope">Accounting Dashboard</div></div></div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="login-h">Masuk</div>', unsafe_allow_html=True)
-        st.markdown('<p class="login-p">Dashboard internal. Semua approve/reject tercatat atas nama nizar.</p>', unsafe_allow_html=True)
-
-        if not expected:
-            st.error("`APP_PASSWORD` belum diset. Isi di Streamlit Cloud → Settings → Secrets, atau environment variable saat jalan lokal.")
-            st.stop()
-
-        with st.form("login_form", border=False):
-            pw = st.text_input("Password", type="password", placeholder="••••••••")
-            ok = st.form_submit_button("Masuk", type="primary", width="stretch")
-        if ok:
-            if check_password(pw, expected):
-                st.session_state["_auth"] = True
-                st.rerun()
-            st.error("Password salah.")
-
-    st.stop()
-
-
 # ── sidebar ─────────────────────────────────────────────────────────────────
 NAV = [
     ("review", "Review jurnal"),
@@ -443,7 +432,7 @@ NAV = [
 ]
 
 
-def render_sidebar() -> str:
+def render_sidebar(reviewer: str = "Tim Dawend") -> str:
     with st.sidebar:
         st.markdown(
             '<div class="brand"><div class="mark">A</div>'
@@ -469,7 +458,7 @@ def render_sidebar() -> str:
         st.markdown('<div class="side-foot">', unsafe_allow_html=True)
         st.markdown(
             '<div class="kv"><span class="k">Engine</span><span class="v">rules-engine-v1</span></div>'
-            '<div class="kv"><span class="k">Reviewer</span><span class="v">nizar</span></div>'
+            '<div class="kv"><span class="k">Reviewer</span><span class="v">' + reviewer + '</span></div>'
             f'<div class="kv"><span class="k">Database</span><span class="v">{db_label()}</span></div>'
             '<div class="kv"><span class="k">Accurate</span><span class="v">belum aktif</span></div>',
             unsafe_allow_html=True,
@@ -627,8 +616,13 @@ def _rail_label(r: dict) -> str:
 
 def render_detail(draft: dict) -> None:
     status = draft["status"]
-    balanced = Decimal(str(draft["total_debit"])) == Decimal(str(draft["total_credit"]))
     branch = f"{draft.get('branch_code') or '—'} · {draft.get('branch_name') or '—'}"
+    reviewer = draft.get("reviewed_by")
+    reviewed_at = draft.get("reviewed_at")
+    reviewed_txt = ""
+    if reviewer:
+        when = reviewed_at.strftime("%d %b %Y %H:%M") if hasattr(reviewed_at, "strftime") else reviewed_at
+        reviewed_txt = f" &nbsp;·&nbsp; direview <b>{reviewer}</b> {when}"
 
     st.markdown(
         f"""
@@ -637,7 +631,7 @@ def render_detail(draft: dict) -> None:
   <div class="meta">
     Invoice <b>{draft['external_id']}</b> &nbsp;·&nbsp; {draft['business_date']}
     &nbsp;·&nbsp; {branch} &nbsp;·&nbsp; engine <b>{draft.get('ai_model') or '—'}</b>
-    &nbsp;·&nbsp; confidence <b>{draft.get('confidence') if draft.get('confidence') is not None else '—'}</b>
+    &nbsp;·&nbsp; confidence <b>{draft.get('confidence') if draft.get('confidence') is not None else '—'}</b>{reviewed_txt}
   </div>
   <div class="amt">{rp(draft['total_debit'])}</div>
 </div>
@@ -647,6 +641,30 @@ def render_detail(draft: dict) -> None:
 
     items = draft.get("items") or []
     if items:
+        sum_debit = sum(it.get("debit", 0) or 0 for it in items)
+        sum_credit = sum(it.get("credit", 0) or 0 for it in items)
+        diff = round(sum_debit - sum_credit, 2)
+        balanced = diff == 0
+        badge = (
+            '<span class="pill pill-positive">Seimbang</span>'
+            if balanced
+            else '<span class="pill pill-negative">Selisih '
+            + rp(abs(diff))
+            + "</span>"
+        )
+        st.markdown(
+            '<div class="totals">'
+            '<div class="cell"><div class="lab">Total debit</div>'
+            f'<div class="val">{rp(sum_debit)}</div></div>'
+            '<div class="cell"><div class="lab">Total kredit</div>'
+            f'<div class="val">{rp(sum_credit)}</div></div>'
+            '<div class="cell"><div class="lab">Keseimbangan</div>'
+            f'<div class="val state">{badge}'
+            f'<span style="font-size:12px;color:var(--muted);font-weight:400;">{len(items)} baris</span>'
+            "</div></div></div>",
+            unsafe_allow_html=True,
+        )
+
         body = "".join(
             "<tr>"
             f"<td class='n'>{it['line_no']}</td>"
@@ -654,15 +672,20 @@ def render_detail(draft: dict) -> None:
             f"<td>{it['account_name']}</td>"
             f"<td class='n'>{rp(it['debit']) if it.get('debit') else '—'}</td>"
             f"<td class='n'>{rp(it['credit']) if it.get('credit') else '—'}</td>"
-            f"<td style='color:var(--muted);'>{it.get('description') or '—'}</td>"
+            f"<td class='desc'>{it.get('description') or '—'}</td>"
             "</tr>"
             for it in items
         )
         st.markdown(
-            "<table class='jt' style='margin-top:16px;'>"
+            '<div class="jt-wrap"><table class="jt">'
             "<thead><tr><th class='n'>#</th><th>Kode</th><th>Akun</th>"
             "<th class='n'>Debit</th><th class='n'>Kredit</th><th>Keterangan</th></tr></thead>"
-            f"<tbody>{body}</tbody></table>",
+            f"<tbody>{body}</tbody>"
+            "<tfoot><tr><td colspan='3'>Total</td>"
+            f"<td class='n'>{rp(sum_debit)}</td>"
+            f"<td class='n'>{rp(sum_credit)}</td>"
+            f"<td>{badge}</td></tr></tfoot>"
+            "</table></div>",
             unsafe_allow_html=True,
         )
         if not balanced:
@@ -670,10 +693,10 @@ def render_detail(draft: dict) -> None:
     else:
         st.caption("Tidak ada baris jurnal pada draft ini.")
 
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
     if status == "PENDING":
-        c1, c2, c3, _ = st.columns([1, 1, 1.2, 1.6])
+        c1, c2, c3, _ = st.columns([1, 1, 1.4, 1.9])
         with c1:
             if st.button("Approve", key="act_ok", type="primary", width="stretch"):
                 set_draft_status(draft["id"], "APPROVED", REVIEWER)
@@ -683,7 +706,7 @@ def render_detail(draft: dict) -> None:
                 set_draft_status(draft["id"], "REJECTED", REVIEWER)
                 st.rerun()
         with c3:
-            if st.button("Hitung ulang", key="act_re", type="tertiary", width="stretch"):
+            if st.button("Hitung ulang", key="act_re", type="secondary", width="stretch"):
                 info = recompute_draft(draft["id"])
                 st.toast(f"{info['items']} baris · {rp(info['total_debit'])}")
                 st.rerun()
@@ -951,8 +974,9 @@ def page_utils() -> None:
 def main() -> None:
     inject_css()
 
-    if not st.session_state.get("_auth"):
-        render_login()
+    # Centralized password gate; returns the reviewer name entered at login.
+    global REVIEWER
+    REVIEWER = require_login()
 
     ok, err = db_check()
     if not ok:
@@ -965,7 +989,7 @@ def main() -> None:
                 st.rerun()
         st.stop()
 
-    page = render_sidebar()
+    page = render_sidebar(REVIEWER)
     branches = [b for b in list_branches() if b["is_active"]]
     branch_code = render_topbar(page, branches, st.session_state.get("branch_code"))
 

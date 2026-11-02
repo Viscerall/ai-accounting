@@ -540,7 +540,7 @@ def get_draft_by_id(draft_id: int) -> dict | None:
         return _hydrate_draft(conn, row) if row else None
 
 
-def set_draft_status(draft_id: int, status: str, reviewer: str = "nizar") -> None:
+def set_draft_status(draft_id: int, status: str, reviewer: str = "Tim Dawend") -> None:
     """Ubah status satu draft (APPROVED / REJECTED / PENDING / SYNCED)."""
     if status not in {"PENDING", "APPROVED", "REJECTED", "SYNCED"}:
         raise ValueError(f"Status tidak dikenal: {status}")
@@ -632,8 +632,24 @@ def recompute_draft(draft_id: int) -> dict:
         if not row:
             raise ValueError(f"Draft {draft_id} tidak ditemukan")
         payload = row["payload"]
-    from app.mapping_rules import build_draft
-    new_lines = build_draft(payload)
+    # Recalculate using the same deterministic calculator + COA mapping as ingest.
+    # The old implementation passed the raw payload directly to build_draft(),
+    # but build_draft() requires a CalculationResult and a COA map.
+    from app.calculator import calculate
+    from app.mapping_rules import CoaAccount, build_draft
+
+    result = calculate(payload)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, account_code, account_name FROM chart_of_accounts WHERE is_active = true")
+            coa_rows = [dict(r) for r in cur.fetchall()]
+    coa_map = {
+        r["account_code"]: CoaAccount(
+            id=r["id"], account_code=r["account_code"], account_name=r["account_name"]
+        )
+        for r in coa_rows
+    }
+    new_lines = build_draft(result, coa_map)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
