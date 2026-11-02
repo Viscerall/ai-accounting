@@ -13,6 +13,33 @@ Biaya: **Rp 0**. Yang perlu dibuat: akun Supabase, akun GitHub (sudah ada), akun
 
 ---
 
+## 📱 Bisa semua dari HP?
+
+Ya, hampir semua — asal **jangan** pakai `python sql/create_db.py`.
+Ganti dengan paste SQL di browser.
+
+| Langkah | Dari HP? | Caranya |
+|---|---|---|
+| Bikin project Supabase | ✅ | Browser → supabase.com |
+| Bikin tabel + COA | ✅ | Supabase → **SQL Editor** → paste `sql/supabase_setup.sql` → Run |
+| Bikin repo GitHub | ✅ | Sudah jadi: `Viscerall/ai-accounting` |
+| Deploy Streamlit Cloud | ✅ | share.streamlit.io → GitHub → isi Secrets |
+| Update kode kecil (typo) | ✅ | Edit langsung di github.com |
+| Update kode besar | ❌ | Butuh laptop / terminal |
+| Cron GDrive Minggu 09:00 | ❌ | Butuh laptop nyala + token OAuth |
+
+### Langkah SQL dari HP (pengganti `create_db.py`)
+
+1. Supabase → project kamu → **SQL Editor** → **New query**
+2. Buka <https://github.com/Viscerall/ai-accounting/blob/main/sql/supabase_setup.sql>
+   di tab lain → klik **Copy raw file**
+3. Paste ke SQL Editor → **Run**
+4. Cek **Table Editor**: 7 tabel + 16 akun COA
+
+File itu **idempotent** — aman di-run dua kali, tidak error.
+
+---
+
 ## 0. Yang sudah disiapkan di repo
 
 | File | Fungsi |
@@ -58,8 +85,8 @@ export DATABASE_URL="postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-ap-southea
 python sql/create_db.py
 ```
 
-Script ini bikin 6 tabel + seed 16 akun COA. Cek di Supabase → **Table Editor**,
-harusnya sudah kelihatan tabel `raw_transactions`, `journal_drafts`, `journal_lines`, `coa`, dst.
+Script ini bikin 7 tabel + seed 16 akun COA. Cek di Supabase → **Table Editor**,
+harusnya sudah kelihatan tabel `raw_transactions`, `journal_drafts`, `journal_draft_items`, `chart_of_accounts`, dan tabel audit/operasional lainnya.
 
 ## 3. Bikin repo GitHub
 
