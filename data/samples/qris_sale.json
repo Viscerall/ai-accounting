@@ -1,0 +1,39 @@
+{
+  "invoice_no": "INV-2026-11-001",
+  "business_date": "2026-11-01",
+  "source": "accurate_pos",
+  "tax": {
+    "pb1_rate": 0.1,
+    "service_charge_rate": 0.05,
+    "tax_inclusive": false
+  },
+  "lines": [
+    {
+      "item_name": "Nasi Goreng Kampung",
+      "qty": 2,
+      "unit_price": 45000,
+      "line_discount": 0
+    },
+    {
+      "item_name": "Es Kopi Susu",
+      "qty": 2,
+      "unit_price": 28000,
+      "line_discount": 5000
+    },
+    {
+      "item_name": "Pisang Goreng Keju",
+      "qty": 1,
+      "unit_price": 35000,
+      "line_discount": 0
+    }
+  ],
+  "bill_discount": 10000,
+  "payments": [
+    {
+      "method": "QRIS",
+      "acquirer": "GoPay",
+      "gross_amount": 190900.0,
+      "mdr_rate": 0.007
+    }
+  ]
+}

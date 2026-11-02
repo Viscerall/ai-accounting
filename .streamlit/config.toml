@@ -1,0 +1,21 @@
+[theme]
+primaryColor = "#0F766E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F5F9"
+textColor = "#0F172A"
+font = "sans serif"
+
+[server]
+headless = true
+# JANGAN set enableCORS=false: itu bikin Streamlit menerima koneksi
+# WebSocket dari origin mana pun, dan password gate-nya jadi bisa ditembus
+# dari halaman lain. Streamlit Cloud pakai default aman — biarkan.
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Publik & dikunci password: jangan tampilkan traceback ke pengunjung,
+# isinya bisa bocorkan connection string / struktur DB.
+showErrorDetails = false
+toolbarMode = "minimal"

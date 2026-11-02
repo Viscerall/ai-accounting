@@ -1,0 +1,29 @@
+# === Secrets & credentials — JANGAN PERNAH di-commit ===
+.env
+.streamlit/secrets.toml
+*.pem
+*.key
+credentials.json
+token.json
+google_token.json
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# === Test & tooling cache ===
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# === Logs & output lokal ===
+logs/*.log
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini

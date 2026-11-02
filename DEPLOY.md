@@ -1,0 +1,156 @@
+# Deploy Publik — Jalur A (Streamlit Community Cloud + Supabase)
+
+Tujuan: dashboard bisa diakses publik lewat URL gratis, **dikunci password**, dan datanya
+disimpan di Postgres gratis selamanya (500 MB).
+
+```
+Browser publik  ──►  Streamlit Community Cloud (gratis, auto-deploy dari GitHub)
+                          │
+                          └──►  Supabase Postgres (500 MB gratis)  ◄──  cron lokal Minggu 09:00 ──► GDrive Excel
+```
+
+Biaya: **Rp 0**. Yang perlu dibuat: akun Supabase, akun GitHub (sudah ada), akun Streamlit.
+
+---
+
+## 0. Yang sudah disiapkan di repo
+
+| File | Fungsi |
+|---|---|
+| `app/auth.py` | Gerbang password (`APP_PASSWORD`), fail-closed kalau belum di-set |
+| `.streamlit/config.toml` | Tema + `headless` untuk server |
+| `.streamlit/secrets.toml.example` | Template secrets untuk Streamlit Cloud |
+| `.gitignore` | `.env` & `.streamlit/secrets.toml` **tidak** ikut ter-commit |
+| `requirements.txt` | Termasuk `openpyxl` untuk ekspor Excel |
+
+---
+
+## 1. Bikin database di Supabase
+
+1. Buka <https://supabase.com> → **Start your project** (login pakai GitHub).
+2. **New project**:
+   - Name: `ai-accounting`
+   - Database Password: **catat/simpan** (ini password Postgres, bukan password dashboard)
+   - Region: **Southeast Asia (Singapore)** — paling dekat ke Indonesia
+   - Plan: **Free**
+3. Tunggu ±2 menit sampai project siap.
+4. Ambil connection string: **Project Settings → Database → Connection string → URI**.
+   Bentuknya:
+
+   ```
+   postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
+   ```
+
+   Tambahkan `?sslmode=require` di belakangnya. Kalau mau pakai **Session pooler**
+   (lebih tahan idle), pilih tab *Session pooler* di halaman yang sama.
+
+> **Storage**: free tier Supabase = 500 MB database. Data jurnal teks (nominal + kode akun)
+> sangat kecil — 1 transaksi ± 1–2 KB. Artinya ± 250.000–500.000 transaksi.
+> File Excel/foto **tidak** disimpan di Supabase, tapi di Google Drive.
+
+## 2. Isi schema + COA ke Supabase
+
+Di mesin lokal, pakai connection string Supabase (bukan localhost):
+
+```bash
+cd C:/Users/nizar/ai-accounting
+export DATABASE_URL="postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require"
+python sql/create_db.py
+```
+
+Script ini bikin 6 tabel + seed 16 akun COA. Cek di Supabase → **Table Editor**,
+harusnya sudah kelihatan tabel `raw_transactions`, `journal_drafts`, `journal_lines`, `coa`, dst.
+
+## 3. Bikin repo GitHub
+
+Repo sudah di-push otomatis ke:
+
+```
+https://github.com/Viscerall/ai-accounting
+```
+
+Kalau mau bikin sendiri dari nol:
+
+```bash
+gh repo create ai-accounting --public --source=. --remote=origin --push
+```
+
+> **Public vs Private**: Streamlit Community Cloud bisa deploy dari repo **private** juga
+> (gratis, login GitHub yang sama). Kalau tidak nyaman kode terbuka, set repo private —
+> app tetap bisa diakses publik.
+
+## 4. Deploy di Streamlit Community Cloud
+
+1. Buka <https://share.streamlit.io> → login pakai GitHub → **Create app**.
+2. Isi:
+   - **Repository**: `Viscerall/ai-accounting`
+   - **Branch**: `main`
+   - **Main file path**: `dashboard.py`
+   - **App URL**: pilih subdomain, misal `ai-accounting-nizar` → jadi
+     `https://ai-accounting-nizar.streamlit.app`
+3. **Sebelum klik Deploy**, buka **Advanced settings → Secrets** dan paste:
+
+   ```toml
+   APP_PASSWORD = "[SET_YOUR_PRIVATE_PASSWORD]"
+   DATABASE_URL = "postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require"
+   HERMES_ENGINE = "rules"
+   HERMES_PROMPT_TIMEOUT = "30"
+   ```
+
+4. **Deploy**. Build pertama ±3–5 menit (install requirements).
+5. Buka URL app → harusnya muncul layar **login password**, bukan dashboard.
+
+## 5. Ganti password nanti
+
+Streamlit Cloud → app kamu → **⋮ → Settings → Secrets** → ubah `APP_PASSWORD` → **Save**.
+App restart otomatis. Tidak perlu commit apa pun.
+
+---
+
+## Cara kerja password
+
+- Password disimpan di **Streamlit Secrets**, bukan di kode, bukan di repo.
+- Perbandingan pakai `hmac.compare_digest` (constant-time, tidak bisa ditebak lewat timing).
+- Login disimpan di `st.session_state` — hilang saat tab ditutup / app restart.
+- Kalau `APP_PASSWORD` kosong → dashboard **menolak jalan** (fail-closed), bukan terbuka.
+- Tombol **Logout** ada di sidebar bawah.
+
+## Yang tetap jalan lokal
+
+| Fitur | Di Cloud | Di Lokal |
+|---|---|---|
+| Review / approve / reject jurnal | ✅ | ✅ |
+| Lihat KPI & COA | ✅ | ✅ |
+| Ekspor Excel manual ke GDrive | ❌ (butuh `google_api.py` + token OAuth lokal) | ✅ |
+| Ekspor otomatis Minggu 09:00 → GDrive | ❌ | ✅ (Hermes cron `70bb99f016b4`) |
+
+**Penting:** cron GDrive tetap di laptop karena butuh token OAuth Google.
+Supaya tetap jalan, laptop harus nyala hari Minggu. Kalau mati, jalankan manual:
+
+```bash
+python scripts/weekly_export.py --force
+```
+
+## Batasan free tier (biar tidak kaget)
+
+| Limit | Nilai | Dampak |
+|---|---|---|
+| Supabase DB | 500 MB | Cukup ratusan ribu transaksi |
+| Supabase idle | Project di-pause setelah 7 hari tidak ada aktivitas | Buka dashboard = aktivitas, jadi aman |
+| Streamlit Cloud | App "sleep" setelah tidak diakses lama | Request pertama agak lambat (±30 detik), lalu normal |
+| Streamlit Cloud RAM | 1 GB | Cukup untuk app ini |
+
+## Troubleshooting
+
+**"Tidak bisa connect ke database"**
+→ Secrets `DATABASE_URL` salah / lupa `?sslmode=require`. Cek di Supabase → Settings → Database.
+
+**Layar login muncul terus walau password benar**
+→ `APP_PASSWORD` di Secrets ada spasi/quote nyangkut. Isi dengan password privatmu sendiri, tanpa menaruhnya di repo.
+
+**App error `ModuleNotFoundError`**
+→ Ada dependency baru yang belum masuk `requirements.txt`. Tambah, commit, push — Streamlit auto-rebuild.
+
+**Tabel kosong di cloud padahal lokal ada data**
+→ Lokal pakai Postgres localhost, cloud pakai Supabase. Dua database terpisah.
+Untuk pindah data: `pg_dump` lokal lalu restore ke Supabase, atau input ulang via dashboard.
