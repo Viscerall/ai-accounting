@@ -1,4 +1,4 @@
-# AI Accounting — Jurnal Otomatis untuk Kafe
+# Dawend — Jurnal Otomatis untuk Kafe
 
 MVP Scenario A: **Python lokal + Postgres + Streamlit**.
 

@@ -1,22 +1,33 @@
-"""Streamlit dashboard — AI Accounting untuk kafe."""
+"""Dawend — Streamlit dashboard.
+
+Design: taste-skill app screen, style "accent-ladder" (light), shell "ruled-t-frame".
+One brand hue (#b8336a) at full strength only on small marks; its pale tints carry
+every area (active nav row, selected queue row, pills, focus rings).
+"""
 from __future__ import annotations
+
 import json
+import os
 import traceback
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-# Import modul app di dalam try/except supaya kalau import gagal (mis. psycopg
-# belum terinstall / tabel belum ada / kode lama belum migrasi), kita tetap
-# menampilkan pesan error yang informatif di UI — bukan ImportError pink
-# generik dari Streamlit.
+st.set_page_config(
+    page_title="Dawend · Accounting Dashboard",
+    page_icon="◧",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── imports (fail closed, show the traceback) ───────────────────────────────
 try:
     from app.calculator import calculate
-    from app.auth import require_login
-    from app.config import settings, db_label
+    from app.auth import check_password, logout
+    from app.config import db_label
     from app.db import (
         branch_usage,
         create_branch,
@@ -34,342 +45,940 @@ try:
     )
     from app.mapping_rules import MappingError
 except Exception:  # noqa: BLE001
-    import sys
-
-    _import_error = traceback.format_exc()
-    st.title("AI Accounting — import gagal")
-    st.error(
-        "Modul app gagal diimpor. Detail (kirim ini ke developer): "
-        + _import_error
-    )
-    st.code(_import_error, language="python")
+    _tb = traceback.format_exc()
+    st.title("Import gagal")
+    st.error("Modul `app` gagal diimpor. Kirim teks di bawah ke developer.")
+    st.code(_tb, language="python")
     st.stop()
 
 SAMPLE_DIR = Path(__file__).parent / "data" / "samples"
 REVIEWER = "nizar"
-BADGE = {"PENDING": ("⏳", "#fff3cd"), "APPROVED": ("✅", "#d4edda"), "REJECTED": ("❌", "#f8d7da"), "SYNCED": ("🔄", "#d1ecf1")}
-st.set_page_config(page_title="AI Accounting — Kafe", page_icon="🧾", layout="wide")
-st.markdown("<style>.badge{padding:3px 10px;border-radius:12px;font-weight:600}.mono{font-family:monospace}</style>", unsafe_allow_html=True)
 
 
+# ── helpers ─────────────────────────────────────────────────────────────────
 def rp(value) -> str:
     try:
-        return f"Rp {Decimal(str(value)):,.0f}".replace(",", ".")
-    except Exception:
+        n = Decimal(str(value or 0))
+    except (InvalidOperation, ValueError):
         return "Rp 0"
+    return f"Rp {n:,.0f}".replace(",", ".")
 
 
-def db_check():
+def num(value) -> str:
+    try:
+        return f"{int(value):,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "0"
+
+
+def db_check() -> tuple[bool, str]:
     try:
         with get_conn() as conn:
             conn.execute("SELECT 1")
         return True, ""
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return False, str(exc)
 
 
-def load_samples():
-    result = {}
-    for path in sorted(SAMPLE_DIR.glob("*.json")) if SAMPLE_DIR.exists() else []:
-        try:
-            result[path.name] = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return result
-
-
-def render_detail(draft: dict):
-    icon, color = BADGE.get(draft["status"], ("❓", "#eee"))
-    branch_label = f"{draft.get('branch_code', 'PUSAT')} · {draft.get('branch_name', 'Cabang Utama')}"
-    st.markdown(f"### {draft['draft_no']} <span class='badge' style='background:{color}'>{icon} {draft['status']}</span>", unsafe_allow_html=True)
-    st.caption(f"Invoice **{draft['external_id']}** · tanggal **{draft['business_date']}** · cabang **{branch_label}** · engine `{draft.get('ai_model')}` · confidence `{draft.get('confidence')}`")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Debit", rp(draft["total_debit"]))
-    c2.metric("Total Kredit", rp(draft["total_credit"]))
-    balanced = Decimal(str(draft["total_debit"])) == Decimal(str(draft["total_credit"]))
-    c3.metric("Balance", "SEIMBANG ✅" if balanced else "TIDAK SEIMBANG ⚠️")
-    items = draft.get("items") or []
-    if items:
-        frame = pd.DataFrame(items)[["line_no", "account_code", "account_name", "debit", "credit", "description"]]
-        frame.columns = ["#", "Kode", "Nama Akun", "Debit", "Kredit", "Keterangan"]
-        frame["Debit"] = frame["Debit"].apply(rp)
-        frame["Kredit"] = frame["Kredit"].apply(rp)
-        st.markdown("#### Baris Jurnal")
-        st.dataframe(frame, hide_index=True, width="stretch")
-    with st.expander("🧠 Alasan mapping"):
-        st.write(draft.get("ai_reasoning") or "—")
-        st.json(draft.get("payload") or {})
-    if draft["status"] == "PENDING":
-        a, b, c, _ = st.columns([1, 1, 1, 3])
-        if a.button("✅ Approve", key=f"ap{draft['id']}", type="primary"):
-            set_draft_status(draft["id"], "APPROVED", REVIEWER)
-            st.rerun()
-        if b.button("❌ Reject", key=f"rj{draft['id']}"):
-            set_draft_status(draft["id"], "REJECTED", REVIEWER)
-            st.rerun()
-        if c.button("🔁 Recompute", key=f"rc{draft['id']}"):
-            info = recompute_draft(draft["id"])
-            st.success(f"Recompute: {info['items']} baris, {rp(info['total_debit'])}")
-            st.rerun()
-    elif st.button("↩️ Balikin ke PENDING", key=f"bk{draft['id']}"):
-        set_draft_status(draft["id"], "PENDING", REVIEWER)
-        st.rerun()
-
-
-def page_drafts(branch_code: str | None = None):
-    picked = st.radio("Filter status", ["Semua", "PENDING", "APPROVED", "REJECTED", "SYNCED"], horizontal=True, label_visibility="collapsed")
-    rows = list_drafts(None if picked == "Semua" else picked, 500, branch_code=branch_code)
-    if not rows:
-        st.info("Belum ada draft. Buka tab Demo & Utils untuk load contoh.")
-        return
-    frame = pd.DataFrame([{"id": r["id"], "Draft": r["draft_no"], "Invoice": r["external_id"], "Cabang": r.get("branch_code", "-"), "Tanggal": str(r["business_date"]), "Status": r["status"], "Nilai": rp(r["total_debit"]), "Baris": len(r.get("items") or []), "Reviewer": r["reviewed_by"] or "-"} for r in rows])
-    st.metric("Jumlah draft", len(rows))
-    st.dataframe(frame.drop(columns=["id"]), hide_index=True, width="stretch")
-    choices = {f"{r['draft_no']} · {r['external_id']} · {rp(r['total_debit'])}": r["id"] for r in rows}
-    choice = st.selectbox("Pilih draft untuk direview", list(choices))
-    if choice:
-        detail = next(r for r in rows if r["id"] == choices[choice])
-        render_detail(detail)
-
-
-def page_coa():
-    rows = list_coa_rows()
-    frame = pd.DataFrame(rows)
-    if frame.empty:
-        st.warning("COA kosong. Jalankan python sql/create_db.py")
-        return
-    frame["Aktif"] = frame["is_active"].map({True: "✅", False: "—"})
-    st.dataframe(frame[["account_code", "account_name", "account_type", "normal_balance", "Aktif", "description"]], hide_index=True, width="stretch")
-    st.caption("COA masih dummy; nanti ganti sql/002_seed_coa.sql dengan COA Accurate asli.")
-    with st.expander("Mapping rules aktif"):
-        st.code("CASH → D 1100 Kas\nQRIS → D 1120 Settlement QRIS\nDEBIT/EDC → D 1121 Settlement EDC\nMDR → D 6100 Beban MDR\nDPP → K 4100 Pendapatan Penjualan\nService → K 4110 Pendapatan Service Charge\nPB1 → K 2100 Utang Pajak PB1")
-
-
-def page_utils():
-    st.markdown("#### Load contoh transaksi")
-    for name, payload in load_samples().items():
-        left, right = st.columns([3, 1])
-        left.write(f"`{name}`")
-        if right.button("Ingest", key=f"sample-{name}"):
+def load_samples() -> dict:
+    out = {}
+    if SAMPLE_DIR.exists():
+        for path in sorted(SAMPLE_DIR.glob("*.json")):
             try:
-                raw_id, draft_id = ingest_transaction(payload)
-                st.success(f"Masuk: raw_id={raw_id}, draft_id={draft_id}")
-                st.rerun()
-            except (ValueError, MappingError) as exc:
-                st.error(f"Gagal: {exc}")
-    st.markdown("---")
-    st.markdown("#### Upload JSON manual")
-    uploaded = st.file_uploader("File JSON transaksi Accurate POS", type=["json"])
-    branch_opt = [b["branch_code"] for b in list_branches(active_only=True)]
-    if branch_opt:
-        sel_branch = st.selectbox("🏪 Cabang target", branch_opt, help="Cabang tujuan penyimpanan transaksi.")
-    else:
-        sel_branch = None
-        st.caption("Belum ada cabang aktif — tambah dulu di tab **🏪 Kelola Cabang**.")
-    if uploaded and st.button("Ingest upload", disabled=not sel_branch):
-        try:
-            payload = json.loads(uploaded.read().decode("utf-8"))
-            payload["branch_code"] = sel_branch
-            raw_id, draft_id = ingest_transaction(payload)
-            st.success(f"Masuk: raw_id={raw_id}, draft_id={draft_id} (cabang {sel_branch})")
-            st.rerun()
-        except (ValueError, MappingError, json.JSONDecodeError) as exc:
-            st.error(f"Gagal: {exc}")
-    st.markdown("---")
-    st.markdown("#### Kalkulator manual (tidak disimpan)")
-    with st.form("calculator"):
-        c1, c2, c3 = st.columns(3)
-        qty = c1.number_input("Qty", 1, 999, 1)
-        price = c2.number_input("Harga satuan", 0, 100_000_000, 50000, step=1000)
-        discount = c3.number_input("Diskon bill", 0, 100_000_000, 0, step=1000)
-        c4, c5 = st.columns(2)
-        pb1 = c4.number_input("PB1 (%)", 0.0, 30.0, 10.0, step=0.5)
-        service = c5.number_input("Service charge (%)", 0.0, 30.0, 0.0, step=0.5)
-        method = st.selectbox("Metode bayar", ["CASH", "QRIS", "DEBIT"])
-        run = st.form_submit_button("Hitung", type="primary")
-    if run:
-        payload = {"invoice_no": f"SIM-{uuid.uuid4().hex[:6].upper()}", "business_date": "2026-11-02", "tax": {"pb1_rate": pb1 / 100, "service_charge_rate": service / 100, "tax_inclusive": False}, "lines": [{"item_name": "Simulasi", "qty": int(qty), "unit_price": price}], "bill_discount": discount, "payments": [{"method": "CASH", "gross_amount": 10**12, "mdr_rate": 0.0}]}
-        result = calculate(payload)
-        st.dataframe(pd.DataFrame([["DPP", rp(result.dpp)], ["Service charge", rp(result.service_charge)], ["PB1", rp(result.tax)], ["TOTAL", rp(result.total_due)], ["Kembalian", rp(result.change_due)]], columns=["Komponen", "Nilai"]), hide_index=True, width="stretch")
-    st.markdown("---")
-    st.markdown("#### Push ke Google Drive")
-    st.caption("Excel mingguan berisi draft APPROVED 7 hari terakhir. Upload manual ini memakai folder `AI Accounting Reports`.")
-    try:
-        from app.drive_export import export_to_drive, gdrive_available
-        drive_ok = gdrive_available()
-    except Exception:
-        drive_ok = False
-
-    if drive_ok:
-        if st.button("📤 Push APPROVED 7 hari terakhir ke GDrive"):
-            try:
-                result = export_to_drive(since_days=7, only_approved=True)
-                if result.get("status") == "uploaded":
-                    st.success(f"✅ {result['draft_count']} draft berhasil di-push ke GDrive")
-                    st.link_button("🔗 Buka file Excel", result["web_view_link"])
-                else:
-                    st.info(result.get("message", "Tidak ada data untuk di-push."))
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"❌ Push GDrive gagal: {exc}")
-    else:
-        st.info(
-            "Push GDrive manual hanya jalan di **mesin lokal** (butuh `google_api.py` + "
-            "token OAuth Google). Di Streamlit Cloud button ini disembunyikan, tapi "
-            "**ekspor mingguan otomatis tetap jalan** lewat cron lokal setiap Minggu 09:00 WIB — "
-            "file Excel mendarat di folder `AI Accounting Reports`."
-        )
-
-    st.markdown("---")
-    st.warning("Danger zone: hapus semua transaksi & draft (COA tetap).")
-    if st.checkbox("Saya yakin") and st.button("🗑️ Hapus semua data"):
-        reset_all()
-        st.success("Semua data dihapus.")
-        st.rerun()
+                out[path.name] = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+    return out
 
 
-def _branch_error(exc: Exception) -> str:
-    """Ubah error DB jadi pesan yang bisa dibaca user."""
+PILL = {
+    "PENDING": ("Menunggu", "pill-accent"),
+    "APPROVED": ("Disetujui", "pill-positive"),
+    "REJECTED": ("Ditolak", "pill-negative"),
+    "SYNCED": ("Tersinkron", "pill-neutral"),
+}
+
+
+def pill(status: str) -> str:
+    label, cls = PILL.get(status, (status, "pill-neutral"))
+    return f'<span class="pill {cls}">{label}</span>'
+
+
+def friendly(exc: Exception) -> str:
     text = str(exc)
-    if "duplicate key" in text or "unique constraint" in text:
-        return "Kode cabang itu sudah dipakai — pilih kode lain."
-    if "foreign key" in text:
+    low = text.lower()
+    if "duplicate key" in low or "unique constraint" in low:
+        return "Kode cabang itu sudah dipakai. Pilih kode lain."
+    if "foreign key" in low:
         return "Cabang ini masih dipakai data lain, jadi tidak bisa dihapus."
     return text
 
 
-def page_branches():
-    st.markdown("#### Daftar cabang")
-    rows = list_branches()
-    if not rows:
-        st.warning("Tabel `branches` belum ada di DB ini. Jalankan `sql/003_branches.sql` (lokal) atau `sql/supabase_setup.sql` (Supabase) dulu.")
-        return
+def radio_default(key: str, options: list, default):
+    if key not in st.session_state or st.session_state[key] not in options:
+        st.session_state[key] = default
 
-    table = []
-    for b in rows:
-        usage = branch_usage(b["id"])
-        table.append(
-            {
-                "Kode": b["branch_code"],
-                "Nama": b["branch_name"],
-                "Kota": b["city"] or "—",
-                "Aktif": "✅" if b["is_active"] else "⛔",
-                "Transaksi": usage["raw_transactions"],
-                "Draft": usage["drafts"],
-            }
+
+# ── CSS ─────────────────────────────────────────────────────────────────────
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap');
+
+:root{
+  --ground:#fbf7f8; --surface:#ffffff; --raised:#f3f4f6; --border:#e5e7eb;
+  --rule:#f2f2f2; --control:#d1d5db; --text:#111827; --muted:#5f6672;
+  --accent:#b8336a; --accent-soft:#fdf2f7; --accent-track:#f8dbe8; --accent-ink:#6b1d3e;
+  --positive:#247b50; --negative:#c4242a; --warning:#92400e;
+  --r-card:8px; --r-ctl:6px; --row:45px; --gap:24px; --pad:24px; --ctl-h:32px;
+}
+
+html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"]{
+  font-family:"DM Sans", Inter, system-ui, sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+[data-testid="stAppViewContainer"]{ background:var(--ground); color:var(--text); }
+#MainMenu, footer, header[data-testid="stHeader"]{ display:none !important; }
+[data-testid="stToolbar"]{ display:none !important; }
+[data-testid="stDecoration"]{ display:none !important; }
+[data-testid="stStatusWidget"]{ display:none !important; }
+
+/* ── frame: no global padding, we pad ourselves ── */
+[data-testid="stMain"] .block-container,
+[data-testid="stAppViewContainer"] .block-container{
+  padding:0 !important; max-width:100% !important;
+}
+[data-testid="stSidebar"]{ background:var(--ground) !important; border-right:1px solid var(--rule); }
+[data-testid="stSidebar"] > div{ background:transparent; }
+[data-testid="stSidebarUserContent"]{ padding:22px 14px 18px !important; }
+[data-testid="stSidebarCollapseButton"] button{ color:var(--muted) !important; }
+
+/* ── type ── */
+h1,h2,h3,h4,h5{ font-family:"DM Sans",sans-serif; color:var(--text); letter-spacing:-0.01em; }
+p, span, div, label, li{ font-size:14px; }
+code, .mono{ font-variant-numeric:tabular-nums; }
+
+/* ── sidebar brand ── */
+.brand{ display:flex; align-items:center; gap:9px; margin:2px 0 26px 2px; }
+.brand .mark{
+  width:26px; height:26px; border-radius:7px; background:var(--accent);
+  color:#fff; font-weight:700; font-size:13px; display:flex;
+  align-items:center; justify-content:center; flex:0 0 auto;
+}
+.brand .name{ font-weight:700; font-size:15px; line-height:1.1; letter-spacing:-0.015em; }
+.brand .scope{ font-size:12px; color:var(--muted); line-height:1.3; }
+
+.nav-label{ font-size:12px; color:var(--muted); margin:0 0 6px 10px; }
+
+/* ── sidebar nav radio → nav rows ── */
+.st-key-nav_radio [data-testid="stRadio"] > label{ display:none; }
+.st-key-nav_radio [role="radiogroup"]{ gap:1px; display:flex; flex-direction:column; }
+.st-key-nav_radio label[data-baseweb="radio"]{
+  height:38px; padding:0 10px; border-radius:var(--r-ctl);
+  display:flex; align-items:center; gap:0; cursor:pointer;
+  transition:background .12s ease, color .12s ease; margin:0;
+}
+.st-key-nav_radio label[data-baseweb="radio"] > div:first-child{ display:none !important; }
+.st-key-nav_radio label[data-baseweb="radio"] p,
+.st-key-nav_radio label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] p{
+  font-size:14px; font-weight:400; color:var(--text); margin:0;
+}
+.st-key-nav_radio label[data-baseweb="radio"]:hover{ background:var(--raised); }
+.st-key-nav_radio label[data-baseweb="radio"]:has(input:checked){ background:var(--accent-soft); }
+.st-key-nav_radio label[data-baseweb="radio"]:has(input:checked) p{
+  color:var(--accent-ink); font-weight:500;
+}
+
+/* ── sidebar footer ── */
+.side-foot{ margin-top:22px; padding-top:14px; border-top:1px solid var(--rule); }
+.side-foot .kv{ display:flex; justify-content:space-between; font-size:12px; line-height:1.9; }
+.side-foot .k{ color:var(--muted); }
+.side-foot .v{ color:var(--text); }
+.side-foot .dot{ color:var(--positive); }
+
+[data-testid="stSidebar"] .stButton button{
+  width:100%; justify-content:flex-start; height:32px; padding:0 10px;
+  background:transparent; border:1px solid var(--border); border-radius:var(--r-ctl);
+  color:var(--muted); font-size:13px; font-weight:400; box-shadow:none;
+}
+[data-testid="stSidebar"] .stButton button:hover{
+  background:var(--surface); border-color:var(--control); color:var(--text);
+}
+
+/* ── top bar ── */
+.st-key-topbar{ border-bottom:1px solid var(--rule); padding:0 var(--pad) !important; }
+.st-key-topbar [data-testid="stHorizontalBlock"]{ height:64px; align-items:center; }
+.tb-title{ font-size:17px; font-weight:500; letter-spacing:-0.01em; line-height:1.2; }
+.tb-sub{ font-size:12px; color:var(--muted); line-height:1.3; margin-top:1px; }
+.tb-sep{ border-left:1px solid var(--rule); height:32px; }
+.st-key-topbar .stSelectbox{ max-width:280px; margin-left:auto; }
+.st-key-topbar .stSelectbox label{ display:none; }
+
+/* ── content ── */
+.st-key-content{ padding:22px var(--pad) 40px !important; }
+
+/* ── KPI container: one panel, 1px dividers ── */
+.kpis{ display:flex; background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--r-card); overflow:hidden; margin:0 0 22px; }
+.kpi{ flex:1; padding:14px 18px 15px; border-right:1px solid var(--rule); min-width:0; }
+.kpi:last-child{ border-right:0; }
+.kpi .lab{ font-size:12px; color:var(--muted); margin-bottom:5px; }
+.kpi .val{ font-size:24px; font-weight:500; letter-spacing:-0.02em; font-variant-numeric:tabular-nums; line-height:1.15; }
+.kpi .val.hue{ color:var(--accent); }
+.kpi .cap{ font-size:12px; color:var(--muted); margin-top:4px; }
+
+/* ── status tabs (underline, 2px indicator) ── */
+.st-key-status_tabs [data-testid="stRadio"] > label{ display:none; }
+.st-key-status_tabs [role="radiogroup"]{
+  border-bottom:1px solid var(--rule); gap:0; padding:0;
+}
+.st-key-status_tabs label[data-baseweb="radio"]{
+  padding:0 0 9px; margin:0 22px 0 0; border-radius:0; position:relative;
+  background:transparent !important; cursor:pointer;
+}
+.st-key-status_tabs label[data-baseweb="radio"] > div:first-child{ display:none !important; }
+.st-key-status_tabs label[data-baseweb="radio"] p{
+  font-size:13px; font-weight:400; color:var(--muted); margin:0;
+}
+.st-key-status_tabs label[data-baseweb="radio"]:hover p{ color:var(--text); }
+.st-key-status_tabs label[data-baseweb="radio"]:has(input:checked) p{
+  color:var(--text); font-weight:500;
+}
+.st-key-status_tabs label[data-baseweb="radio"]:has(input:checked)::after{
+  content:""; position:absolute; left:0; right:0; bottom:-1px;
+  height:2px; background:var(--accent); border-radius:2px 2px 0 0;
+}
+
+/* ── queue rail ── */
+.st-key-rail{ background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--r-card); overflow:hidden; }
+.rail-head{ padding:11px 14px; border-bottom:1px solid var(--rule);
+  display:flex; justify-content:space-between; align-items:baseline; }
+.rail-head .t{ font-size:13px; font-weight:500; }
+.rail-head .c{ font-size:12px; color:var(--muted); }
+
+.st-key-rail_radio [data-testid="stRadio"] > label{ display:none; }
+.st-key-rail_radio [role="radiogroup"]{ gap:0; display:flex; flex-direction:column; }
+.st-key-rail_radio label[data-baseweb="radio"]{
+  min-height:var(--row); padding:8px 14px; border-radius:0; margin:0;
+  border-bottom:1px solid var(--rule); display:flex; align-items:center;
+  cursor:pointer; transition:background .12s ease; background:transparent;
+}
+.st-key-rail_radio label[data-baseweb="radio"]:last-child{ border-bottom:0; }
+.st-key-rail_radio label[data-baseweb="radio"] > div:first-child{ display:none !important; }
+.st-key-rail_radio label[data-baseweb="radio"] p{
+  font-size:13px; font-weight:400; color:var(--text); margin:0;
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis;
+}
+.st-key-rail_radio label[data-baseweb="radio"]:hover{ background:var(--raised); }
+.st-key-rail_radio label[data-baseweb="radio"]:has(input:checked){ background:var(--accent-soft); }
+.st-key-rail_radio label[data-baseweb="radio"]:has(input:checked) p{
+  color:var(--accent-ink); font-weight:500;
+}
+
+.rail-empty{ padding:34px 18px; text-align:center; color:var(--muted); font-size:13px; line-height:1.6; }
+
+/* ── detail ── */
+.st-key-detail{ padding-top:2px; }
+.d-head .row1{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.d-head .no{ font-size:17px; font-weight:500; letter-spacing:-0.01em; }
+.d-head .meta{ font-size:12px; color:var(--muted); margin-top:5px; line-height:1.7; }
+.d-head .meta b{ color:var(--text); font-weight:500; }
+.d-head .amt{ font-size:30px; font-weight:500; letter-spacing:-0.03em;
+  color:var(--accent); font-variant-numeric:tabular-nums; margin-top:12px; line-height:1; }
+
+.pill{ display:inline-block; padding:3px 9px; border-radius:999px;
+  font-size:11px; font-weight:500; line-height:1.35; white-space:nowrap; }
+.pill-positive{ background:#dcfce7; color:#14532d; }
+.pill-negative{ background:#ffedea; color:#831c1e; }
+.pill-warning{ background:#fffbeb; color:#92400e; }
+.pill-neutral{ background:#f3f4f6; color:#374151; }
+.pill-accent{ background:var(--accent-soft); color:var(--accent-ink); }
+
+/* ── tables: no card, no fill on header ── */
+table.jt, table.plain{ width:100%; border-collapse:collapse; }
+table.jt th, table.plain th{
+  font-size:12px; font-weight:400; color:var(--muted); text-align:left;
+  padding:10px 12px; border-bottom:1px solid var(--border); background:transparent;
+  white-space:nowrap;
+}
+table.jt td, table.plain td{
+  font-size:13px; padding:10px 12px; border-bottom:1px solid var(--rule);
+  vertical-align:middle;
+}
+table.jt tr:last-child td, table.plain tr:last-child td{ border-bottom:0; }
+table.jt td.n, table.plain td.n, table.jt th.n, table.plain th.n{
+  text-align:right; font-variant-numeric:tabular-nums;
+}
+table.jt td.n{ font-weight:500; }
+table.jt tbody tr:hover td{ background:var(--ground); }
+table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
+
+/* ── panels for forms / secondary blocks ── */
+.panel{ background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--r-card); padding:18px 20px; margin-bottom:16px; }
+.panel h4{ font-size:14px; font-weight:500; margin:0 0 12px; letter-spacing:-0.005em; }
+.panel .hint{ font-size:12px; color:var(--muted); margin:-4px 0 12px; }
+
+/* ── form controls ── */
+[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input{
+  height:var(--ctl-h) !important; border-radius:var(--r-ctl) !important;
+  border-color:var(--border) !important; font-size:13px !important;
+  background:var(--surface) !important; color:var(--text) !important;
+}
+[data-testid="stTextInput"] input:focus, [data-testid="stNumberInput"] input:focus{
+  border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-soft) !important;
+}
+[data-baseweb="select"] > div{
+  height:var(--ctl-h) !important; min-height:var(--ctl-h) !important;
+  border-radius:var(--r-ctl) !important; border-color:var(--border) !important;
+  background:var(--surface) !important; font-size:13px !important;
+}
+[data-baseweb="select"]:focus-within > div{
+  border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-soft) !important;
+}
+[data-testid="stWidgetLabel"] label, .stTextInput label, .stSelectbox label, .stNumberInput label{
+  font-size:12px !important; color:var(--muted) !important; font-weight:400 !important;
+}
+
+/* ── buttons ── */
+.stButton button, .stFormSubmitButton button, [data-testid="stLinkButton"] a{
+  height:32px; padding:0 14px; border-radius:var(--r-ctl);
+  font-size:13px; font-weight:500; box-shadow:none; transition:all .12s ease;
+}
+.stButton button[kind="primary"], .stFormSubmitButton button[kind="primary"]{
+  background:var(--accent); border:1px solid var(--accent); color:#fff;
+}
+.stButton button[kind="primary"]:hover, .stFormSubmitButton button[kind="primary"]:hover{
+  background:var(--accent-ink); border-color:var(--accent-ink); color:#fff;
+}
+.stButton button[kind="secondary"], .stFormSubmitButton button[kind="secondary"]{
+  background:var(--surface); border:1px solid var(--border); color:var(--text);
+}
+.stButton button[kind="secondary"]:hover{
+  background:var(--raised); border-color:var(--control);
+}
+.stButton button[kind="tertiary"]{
+  background:transparent; border:1px solid transparent; color:var(--muted);
+}
+.stButton button[kind="tertiary"]:hover{ color:var(--text); background:var(--raised); }
+.stButton button:focus-visible, .stFormSubmitButton button:focus-visible{
+  outline:2px solid var(--accent); outline-offset:2px;
+}
+
+/* ── expander / captions / alerts ── */
+[data-testid="stExpander"] details{
+  border:1px solid var(--border); border-radius:var(--r-card);
+  background:var(--surface); overflow:hidden;
+}
+[data-testid="stExpander"] summary{ padding:11px 16px; font-size:13px; font-weight:400; }
+[data-testid="stExpander"] summary:hover{ background:var(--ground); }
+[data-testid="stExpander"] [data-testid="stExpanderDetails"]{ padding:0 16px 14px; }
+
+[data-testid="stCaptionContainer"] p, .stCaption p{ font-size:12px !important; color:var(--muted) !important; }
+[data-testid="stAlert"]{ border-radius:var(--r-card); font-size:13px; }
+
+/* ── login ── */
+.st-key-login{ max-width:372px; margin:14vh auto 0; }
+.st-key-login .brand{ margin-bottom:18px; }
+.login-h{ font-size:22px; font-weight:500; letter-spacing:-0.02em; margin:0 0 6px; }
+.login-p{ font-size:13px; color:var(--muted); margin:0 0 20px; line-height:1.6; }
+.login-f{ font-size:12px; color:var(--muted); margin-top:18px; line-height:1.6; }
+
+/* ── phone ── */
+@media (max-width:900px){
+  .kpis{ flex-wrap:wrap; }
+  .kpi{ flex:1 1 50%; border-bottom:1px solid var(--rule); }
+  .kpi:nth-child(2n){ border-right:0; }
+  .st-key-content{ padding:16px 16px 32px !important; }
+  .st-key-topbar{ padding:0 16px !important; }
+  .st-key-topbar [data-testid="stHorizontalBlock"]{ height:auto; padding:10px 0; }
+}
+"""
+
+
+def inject_css() -> None:
+    st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+
+
+# ── login ───────────────────────────────────────────────────────────────────
+def render_login() -> None:
+    expected = None
+    try:
+        expected = st.secrets["APP_PASSWORD"]
+    except Exception:  # noqa: BLE001
+        expected = os.environ.get("APP_PASSWORD")
+
+    with st.container(key="login"):
+        st.markdown(
+            '<div class="brand"><div class="mark">A</div>'
+            '<div><div class="name">Dawend</div>'
+            '<div class="scope">Accounting Dashboard</div></div></div>',
+            unsafe_allow_html=True,
         )
-    st.dataframe(pd.DataFrame(table), hide_index=True, width="stretch")
-    st.caption("Kode dipakai di payload JSON & filter. Nama dan kota yang tampil di dashboard dan file Excel.")
+        st.markdown('<div class="login-h">Masuk</div>', unsafe_allow_html=True)
+        st.markdown('<p class="login-p">Dashboard internal. Semua approve/reject tercatat atas nama nizar.</p>', unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("#### ➕ Tambah cabang")
-    with st.form("add-branch", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        new_code = c1.text_input("Kode", placeholder="GALAXY")
-        new_name = c2.text_input("Nama", placeholder="Galaxy")
-        new_city = c3.text_input("Kota", placeholder="Bekasi")
-        if st.form_submit_button("Tambah cabang", type="primary"):
-            try:
-                created = create_branch(new_code, new_name, new_city)
-                st.success(f"Cabang **{created['branch_code']}** ditambahkan.")
+        if not expected:
+            st.error("`APP_PASSWORD` belum diset. Isi di Streamlit Cloud → Settings → Secrets, atau environment variable saat jalan lokal.")
+            st.stop()
+
+        with st.form("login_form", border=False):
+            pw = st.text_input("Password", type="password", placeholder="••••••••")
+            ok = st.form_submit_button("Masuk", type="primary", width="stretch")
+        if ok:
+            if check_password(pw, expected):
+                st.session_state["_auth"] = True
                 st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Gagal: {_branch_error(exc)}")
+            st.error("Password salah.")
 
-    st.markdown("---")
-    st.markdown("#### ✏️ Edit / rename cabang")
-    labels = {f"{b['branch_code']} — {b['branch_name']}": b for b in rows}
-    picked = st.selectbox("Pilih cabang", list(labels), key="branch-edit-pick")
-    target = labels[picked]
-    usage = branch_usage(target["id"])
+    st.stop()
 
-    with st.form(f"edit-branch-{target['id']}"):
-        c1, c2, c3 = st.columns(3)
-        edit_code = c1.text_input("Kode", value=target["branch_code"])
-        edit_name = c2.text_input("Nama", value=target["branch_name"])
-        edit_city = c3.text_input("Kota", value=target["city"] or "")
-        edit_active = st.checkbox("Aktif (muncul di filter & pilihan upload)", value=bool(target["is_active"]))
-        if st.form_submit_button("Simpan perubahan", type="primary"):
-            try:
-                updated = update_branch(
-                    target["id"],
-                    branch_code=edit_code,
-                    branch_name=edit_name,
-                    city=edit_city,
-                    is_active=edit_active,
-                )
-                st.success(f"Tersimpan: **{updated['branch_code']} — {updated['branch_name']}** ({updated['city'] or '—'})")
-                st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Gagal: {_branch_error(exc)}")
 
-    st.caption(
-        f"Cabang ini punya **{usage['raw_transactions']} transaksi** dan **{usage['drafts']} draft**. "
-        "Rename hanya mengganti label — data lama tetap menempel ke cabang yang sama."
+# ── sidebar ─────────────────────────────────────────────────────────────────
+NAV = [
+    ("review", "Review jurnal"),
+    ("coa", "Buku besar"),
+    ("branches", "Cabang"),
+    ("utils", "Alat & demo"),
+]
+
+
+def render_sidebar() -> str:
+    with st.sidebar:
+        st.markdown(
+            '<div class="brand"><div class="mark">A</div>'
+            '<div><div class="name">Dawend</div>'
+            '<div class="scope">Accounting Dashboard</div></div></div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown('<div class="nav-label">Menu</div>', unsafe_allow_html=True)
+        keys = [k for k, _ in NAV]
+        labels = [lbl for _, lbl in NAV]
+        radio_default("nav_radio", keys, keys[0])
+        st.radio(
+            "Menu",
+            keys,
+            format_func=lambda k: labels[keys.index(k)],
+            key="nav_radio",
+            label_visibility="collapsed",
+            width="stretch",
+        )
+        active = st.session_state.get("nav_radio", keys[0])
+
+        st.markdown('<div class="side-foot">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="kv"><span class="k">Engine</span><span class="v">rules-engine-v1</span></div>'
+            '<div class="kv"><span class="k">Reviewer</span><span class="v">nizar</span></div>'
+            f'<div class="kv"><span class="k">Database</span><span class="v">{db_label()}</span></div>'
+            '<div class="kv"><span class="k">Accurate</span><span class="v">belum aktif</span></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        if st.button("Keluar", key="logout", icon=":material/logout:"):
+            logout()
+            st.rerun()
+
+    return active
+
+
+# ── top bar ─────────────────────────────────────────────────────────────────
+TITLES = {
+    "review": ("Review jurnal", "Draft jurnal harian yang menunggu keputusan"),
+    "coa": ("Buku besar", "Chart of accounts yang dipakai mapping"),
+    "branches": ("Cabang", "Kelola kode, nama, dan status cabang"),
+    "utils": ("Alat & demo", "Seed contoh, upload JSON, kalkulator, ekspor"),
+}
+
+
+def render_topbar(page: str, branches: list, current: str | None) -> str | None:
+    title, sub = TITLES[page]
+    opts: dict[str, str | None] = {"Semua cabang": None}
+    for b in branches:
+        label = f"{b['branch_code']} · {b['branch_name']}"
+        if b["city"]:
+            label += f", {b['city']}"
+        opts[label] = b["branch_code"]
+
+    labels = list(opts)
+    resolved = next((l for l in labels if opts[l] == current), "Semua cabang")
+    radio_default("branch_sel", labels, resolved)
+
+    with st.container(key="topbar"):
+        left, right = st.columns([2.2, 1], vertical_alignment="center")
+        with left:
+            st.markdown(
+                f'<div class="tb-title">{title}</div><div class="tb-sub">{sub}</div>',
+                unsafe_allow_html=True,
+            )
+        with right:
+            picked = st.selectbox(
+                "Cabang", labels, key="branch_sel", label_visibility="collapsed"
+            )
+    return opts.get(picked)
+
+
+# ── KPI ─────────────────────────────────────────────────────────────────────
+def render_kpis(stats: dict, branch_count: int) -> None:
+    raw = stats.get("raw_transactions", 0) or 0
+    pending = stats.get("pending", 0) or 0
+    approved = stats.get("approved", 0) or 0
+    turnover = stats.get("turnover", 0) or 0
+    st.markdown(
+        f"""
+<div class="kpis">
+  <div class="kpi">
+    <div class="lab">Transaksi masuk</div>
+    <div class="val">{num(raw)}</div>
+    <div class="cap">semua status, sepanjang waktu</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">Menunggu review</div>
+    <div class="val hue">{num(pending)}</div>
+    <div class="cap">butuh keputusan</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">Disetujui</div>
+    <div class="val">{num(approved)}</div>
+    <div class="cap">siap dikirim ke Accurate</div>
+  </div>
+  <div class="kpi">
+    <div class="lab">Turnover</div>
+    <div class="val">{rp(turnover)}</div>
+    <div class="cap">dari {raw} transaksi · {branch_count} cabang aktif</div>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
     )
 
-    with st.expander("🗑️ Hapus cabang"):
-        st.caption("Hanya cabang kosong (tanpa transaksi/draft) yang bisa dihapus. Kalau sudah ada data, nonaktifkan saja.")
-        confirm = st.checkbox("Saya yakin ingin menghapus cabang ini", key=f"del-chk-{target['id']}")
-        if st.button("Hapus cabang", key=f"del-btn-{target['id']}", disabled=not confirm):
+
+# ── review page ─────────────────────────────────────────────────────────────
+STATUS = [("PENDING", "Menunggu"), ("APPROVED", "Disetujui"), ("REJECTED", "Ditolak"), ("SYNCED", "Tersinkron"), ("ALL", "Semua")]
+
+
+def page_review(branch_code: str | None) -> None:
+    codes = [c for c, _ in STATUS]
+    radio_default("status_tab", codes, "PENDING")
+
+    with st.container(key="status_tabs"):
+        st.radio(
+            "Status",
+            codes,
+            format_func=lambda c: dict(STATUS)[c],
+            key="status_tab",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+    status = st.session_state.get("status_tab", "PENDING")
+
+    rows = list_drafts(None if status == "ALL" else status, 500, branch_code=branch_code)
+
+    # left rail 300px + detail
+    col_rail, col_detail = st.columns([1, 2.55], gap="medium")
+
+    with col_rail:
+        with st.container(key="rail"):
+            st.markdown(
+                f'<div class="rail-head"><span class="t">Antrian</span>'
+                f'<span class="c">{len(rows)} draft</span></div>',
+                unsafe_allow_html=True,
+            )
+            if not rows:
+                st.markdown(
+                    '<div class="rail-empty">Belum ada draft di status ini.'
+                    "<br>Coba tab lain, atau muat contoh di <b>Alat &amp; demo</b>.</div>",
+                    unsafe_allow_html=True,
+                )
+                selected = None
+            else:
+                ids = [r["id"] for r in rows]
+                if st.session_state.get("rail_radio") not in ids:
+                    st.session_state["rail_radio"] = ids[0]
+                st.radio(
+                    "Draft",
+                    ids,
+                    format_func=lambda i: _rail_label(next(r for r in rows if r["id"] == i)),
+                    key="rail_radio",
+                    label_visibility="collapsed",
+                    width="stretch",
+                )
+                selected = next(r for r in rows if r["id"] == st.session_state["rail_radio"])
+
+    with col_detail:
+        with st.container(key="detail"):
+            if selected is None:
+                st.markdown(
+                    '<p style="color:var(--muted);font-size:13px;margin-top:8px;">'
+                    "Pilih draft di antrian untuk melihat baris jurnal.</p>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                render_detail(selected)
+
+
+def _rail_label(r: dict) -> str:
+    return (
+        f"{r['draft_no']}  ·  {rp(r['total_debit'])}  ·  "
+        f"{r.get('branch_code') or '—'}  ·  {r['business_date']}"
+    )
+
+
+def render_detail(draft: dict) -> None:
+    status = draft["status"]
+    balanced = Decimal(str(draft["total_debit"])) == Decimal(str(draft["total_credit"]))
+    branch = f"{draft.get('branch_code') or '—'} · {draft.get('branch_name') or '—'}"
+
+    st.markdown(
+        f"""
+<div class="d-head">
+  <div class="row1"><span class="no">{draft['draft_no']}</span>{pill(status)}</div>
+  <div class="meta">
+    Invoice <b>{draft['external_id']}</b> &nbsp;·&nbsp; {draft['business_date']}
+    &nbsp;·&nbsp; {branch} &nbsp;·&nbsp; engine <b>{draft.get('ai_model') or '—'}</b>
+    &nbsp;·&nbsp; confidence <b>{draft.get('confidence') if draft.get('confidence') is not None else '—'}</b>
+  </div>
+  <div class="amt">{rp(draft['total_debit'])}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    items = draft.get("items") or []
+    if items:
+        body = "".join(
+            "<tr>"
+            f"<td class='n'>{it['line_no']}</td>"
+            f"<td class='code'>{it['account_code']}</td>"
+            f"<td>{it['account_name']}</td>"
+            f"<td class='n'>{rp(it['debit']) if it.get('debit') else '—'}</td>"
+            f"<td class='n'>{rp(it['credit']) if it.get('credit') else '—'}</td>"
+            f"<td style='color:var(--muted);'>{it.get('description') or '—'}</td>"
+            "</tr>"
+            for it in items
+        )
+        st.markdown(
+            "<table class='jt' style='margin-top:16px;'>"
+            "<thead><tr><th class='n'>#</th><th>Kode</th><th>Akun</th>"
+            "<th class='n'>Debit</th><th class='n'>Kredit</th><th>Keterangan</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>",
+            unsafe_allow_html=True,
+        )
+        if not balanced:
+            st.warning("Total debit dan kredit tidak sama. Jangan approve sebelum dibetulkan.")
+    else:
+        st.caption("Tidak ada baris jurnal pada draft ini.")
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+    if status == "PENDING":
+        c1, c2, c3, _ = st.columns([1, 1, 1.2, 1.6])
+        with c1:
+            if st.button("Approve", key="act_ok", type="primary", width="stretch"):
+                set_draft_status(draft["id"], "APPROVED", REVIEWER)
+                st.rerun()
+        with c2:
+            if st.button("Reject", key="act_no", type="secondary", width="stretch"):
+                set_draft_status(draft["id"], "REJECTED", REVIEWER)
+                st.rerun()
+        with c3:
+            if st.button("Hitung ulang", key="act_re", type="tertiary", width="stretch"):
+                info = recompute_draft(draft["id"])
+                st.toast(f"{info['items']} baris · {rp(info['total_debit'])}")
+                st.rerun()
+    else:
+        c1, _ = st.columns([1.3, 2.7])
+        with c1:
+            if st.button("Kembalikan ke antrian", key="act_back", type="secondary", width="stretch"):
+                set_draft_status(draft["id"], "PENDING", REVIEWER)
+                st.rerun()
+
+    with st.expander("Alasan mapping"):
+        st.write(draft.get("ai_reasoning") or "Belum ada catatan.")
+        if draft.get("payload"):
+            st.json(draft["payload"], expanded=False)
+
+
+# ── COA ─────────────────────────────────────────────────────────────────────
+def page_coa() -> None:
+    rows = list_coa_rows()
+    if not rows:
+        st.markdown(
+            '<div class="panel"><h4>Buku besar kosong</h4>'
+            '<div class="hint">Jalankan <code>python sql/create_db.py</code> untuk inisialisasi skema dan seed COA.</div></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    body = "".join(
+        "<tr>"
+        f"<td class='code'>{r['account_code']}</td>"
+        f"<td>{r['account_name']}</td>"
+        f"<td style='color:var(--muted);'>{r['account_type']}</td>"
+        f"<td class='n'>{r['normal_balance']}</td>"
+        f"<td class='n'>{'Ya' if r['is_active'] else 'Tidak'}</td>"
+        f"<td style='color:var(--muted);'>{(r.get('description') or '—')[:70]}</td>"
+        "</tr>"
+        for r in rows
+    )
+    st.markdown(
+        f"<div style='font-size:12px;color:var(--muted);margin-bottom:10px;'>{len(rows)} akun</div>"
+        "<table class='plain'>"
+        "<thead><tr><th>Kode</th><th>Nama akun</th><th>Tipe</th>"
+        "<th class='n'>Saldo normal</th><th class='n'>Aktif</th><th>Catatan</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("Aturan mapping yang aktif"):
+        st.code(
+            "CASH          → D 1100 Kas\n"
+            "QRIS          → D 1120 Settlement QRIS\n"
+            "DEBIT / EDC   → D 1121 Settlement EDC\n"
+            "MDR           → D 6100 Beban MDR\n"
+            "DPP           → K 4100 Pendapatan penjualan\n"
+            "Service       → K 4110 Pendapatan service charge\n"
+            "PB1           → K 2100 Utang pajak PB1",
+            language=None,
+        )
+
+
+# ── branches ────────────────────────────────────────────────────────────────
+def page_branches() -> None:
+    rows = list_branches()
+    if not rows:
+        st.markdown(
+            '<div class="panel"><h4>Tabel cabang belum ada</h4>'
+            '<div class="hint">Jalankan <code>sql/003_branches.sql</code> di lokal, '
+            "atau <code>sql/supabase_setup.sql</code> di Supabase.</div></div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    usage = {b["id"]: branch_usage(b["id"]) for b in rows}
+    body = "".join(
+        "<tr>"
+        f"<td class='code'>{b['branch_code']}</td>"
+        f"<td>{b['branch_name']}</td>"
+        f"<td style='color:var(--muted);'>{b['city'] or '—'}</td>"
+        f"<td>{pill('SYNCED') if b['is_active'] else '<span class=\"pill pill-negative\">Nonaktif</span>'}</td>"
+        f"<td class='n'>{num(usage[b['id']]['raw_transactions'])}</td>"
+        f"<td class='n'>{num(usage[b['id']]['drafts'])}</td>"
+        "</tr>"
+        for b in rows
+    )
+    st.markdown(
+        f"<div style='font-size:12px;color:var(--muted);margin-bottom:10px;'>{len(rows)} cabang</div>"
+        "<table class='plain'>"
+        "<thead><tr><th>Kode</th><th>Nama</th><th>Kota</th><th>Status</th>"
+        "<th class='n'>Transaksi</th><th class='n'>Draft</th></tr></thead>"
+        f"<tbody>{body}</tbody></table>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Kode dipakai di payload JSON dan filter. Nama serta kota yang muncul di dashboard dan file Excel.")
+
+    st.markdown("<div style='height:22px'></div>", unsafe_allow_html=True)
+
+    left, right = st.columns(2, gap="medium")
+
+    with left:
+        with st.form("add_branch", border=True):
+            st.markdown("##### Tambah cabang")
+            code = st.text_input("Kode", placeholder="GALAXY")
+            name = st.text_input("Nama", placeholder="Galaxy")
+            city = st.text_input("Kota", placeholder="Bekasi")
+            if st.form_submit_button("Tambah", type="primary", width="stretch"):
+                try:
+                    made = create_branch(code, name, city)
+                    st.toast(f"Cabang {made['branch_code']} ditambahkan.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(friendly(exc))
+
+    with right:
+        labels = {f"{b['branch_code']} · {b['branch_name']}": b for b in rows}
+        with st.form("edit_branch", border=True):
+            st.markdown("##### Ubah cabang")
+            picked = st.selectbox("Cabang", list(labels))
+            target = labels[picked]
+            u = usage[target["id"]]
+            code = st.text_input("Kode", value=target["branch_code"])
+            name = st.text_input("Nama", value=target["branch_name"])
+            city = st.text_input("Kota", value=target["city"] or "")
+            active = st.checkbox("Aktif", value=bool(target["is_active"]))
+            if st.form_submit_button("Simpan", type="primary", width="stretch"):
+                try:
+                    upd = update_branch(
+                        target["id"],
+                        branch_code=code,
+                        branch_name=name,
+                        city=city,
+                        is_active=active,
+                    )
+                    st.toast(f"Tersimpan: {upd['branch_code']} · {upd['branch_name']}")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(friendly(exc))
+        st.caption(
+            f"{num(u['raw_transactions'])} transaksi dan {num(u['drafts'])} draft menempel di cabang ini. "
+            "Mengubah kode atau nama tidak memindahkan data."
+        )
+
+    with st.expander("Hapus cabang"):
+        st.caption("Hanya cabang tanpa transaksi dan tanpa draft yang bisa dihapus. Kalau sudah ada data, nonaktifkan saja.")
+        target = labels[st.selectbox("Cabang yang dihapus", list(labels), key="del_pick")]
+        sure = st.checkbox("Saya yakin", key=f"del_ok_{target['id']}")
+        if st.button("Hapus permanen", key=f"del_go_{target['id']}", disabled=not sure, type="secondary"):
             try:
                 delete_branch(target["id"])
-                st.success(f"Cabang **{target['branch_code']}** dihapus.")
+                st.toast(f"Cabang {target['branch_code']} dihapus.")
                 st.rerun()
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Gagal: {_branch_error(exc)}")
+                st.error(friendly(exc))
 
 
-def main():
-    require_login()
-    ok, error = db_check()
+# ── utils ───────────────────────────────────────────────────────────────────
+def page_utils() -> None:
+    samples = load_samples()
+
+    with st.container(border=True):
+        st.markdown("##### Contoh transaksi")
+        if not samples:
+            st.caption("Folder `data/samples/` kosong.")
+        for name, payload in samples.items():
+            c1, c2 = st.columns([4, 1], vertical_alignment="center")
+            with c1:
+                st.markdown(f"<div style='font-size:13px;'>{name}</div>", unsafe_allow_html=True)
+            with c2:
+                if st.button("Muat", key=f"s_{name}", width="stretch"):
+                    try:
+                        raw_id, draft_id = ingest_transaction(payload)
+                        st.toast(f"Masuk: raw {raw_id}, draft {draft_id}")
+                        st.rerun()
+                    except (ValueError, MappingError) as exc:
+                        st.error(str(exc))
+
+    with st.container(border=True):
+        st.markdown("##### Upload JSON")
+        st.caption("Payload transaksi Accurate POS. Cabang diambil dari pilihan di bawah.")
+        up = st.file_uploader("File JSON", type=["json"], label_visibility="collapsed")
+        opts = [b["branch_code"] for b in list_branches(active_only=True)]
+        target = st.selectbox("Cabang tujuan", opts, key="up_branch") if opts else None
+        if not opts:
+            st.caption("Belum ada cabang aktif. Tambahkan dulu di menu Cabang.")
+        if up and st.button("Proses upload", type="primary", disabled=not target):
+            try:
+                payload = json.loads(up.read().decode("utf-8"))
+                payload["branch_code"] = target
+                raw_id, draft_id = ingest_transaction(payload)
+                st.toast(f"Masuk: raw {raw_id}, draft {draft_id}")
+                st.rerun()
+            except (ValueError, MappingError, json.JSONDecodeError) as exc:
+                st.error(str(exc))
+
+    with st.container(border=True):
+        st.markdown("##### Kalkulator")
+        st.caption("Hitung cepat tanpa menyimpan apa pun.")
+        with st.form("calc"):
+            c1, c2, c3 = st.columns(3)
+            qty = c1.number_input("Qty", 1, 999, 1)
+            price = c2.number_input("Harga satuan", 0, 100_000_000, 50_000, step=1_000)
+            disc = c3.number_input("Diskon bill", 0, 100_000_000, 0, step=1_000)
+            c4, c5 = st.columns(2)
+            pb1 = c4.number_input("PB1 (%)", 0.0, 30.0, 10.0, step=0.5)
+            svc = c5.number_input("Service (%)", 0.0, 30.0, 0.0, step=0.5)
+            go = st.form_submit_button("Hitung", type="primary")
+        if go:
+            payload = {
+                "invoice_no": f"SIM-{uuid.uuid4().hex[:6].upper()}",
+                "business_date": "2026-11-02",
+                "tax": {"pb1_rate": pb1 / 100, "service_charge_rate": svc / 100, "tax_inclusive": False},
+                "lines": [{"item_name": "Simulasi", "qty": int(qty), "unit_price": price}],
+                "bill_discount": disc,
+                "payments": [{"method": "CASH", "gross_amount": 10**12, "mdr_rate": 0.0}],
+            }
+            res = calculate(payload)
+            rows = [
+                ("DPP", rp(res.dpp)),
+                ("Service charge", rp(res.service_charge)),
+                ("PB1", rp(res.tax)),
+                ("Total", rp(res.total_due)),
+                ("Kembalian", rp(res.change_due)),
+            ]
+            st.markdown(
+                "<table class='plain' style='margin-top:8px;'>"
+                + "".join(f"<tr><td>{k}</td><td class='n'>{v}</td></tr>" for k, v in rows)
+                + "</table>",
+                unsafe_allow_html=True,
+            )
+
+    with st.container(border=True):
+        st.markdown("##### Ekspor ke Google Drive")
+        st.caption("Excel mingguan berisi draft APPROVED tujuh hari terakhir.")
+        try:
+            from app.drive_export import export_to_drive, gdrive_available
+
+            drive_ok = gdrive_available()
+        except Exception:  # noqa: BLE001
+            drive_ok = False
+        if drive_ok:
+            if st.button("Push sekarang", type="primary"):
+                try:
+                    out = export_to_drive(since_days=7, only_approved=True)
+                    if out.get("status") == "uploaded":
+                        st.success(f"{out['draft_count']} draft terkirim.")
+                        st.link_button("Buka file", out["web_view_link"])
+                    else:
+                        st.info(out.get("message", "Tidak ada data untuk dikirim."))
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Gagal: {exc}")
+        else:
+            st.caption(
+                "Tombol ini hanya muncul di mesin lokal (butuh token OAuth Google). "
+                "Ekspor otomatis tetap jalan tiap Minggu 09:00 WIB lewat cron lokal."
+            )
+
+    with st.expander("Zona berbahaya"):
+        st.caption("Menghapus semua transaksi dan draft. COA dan cabang tetap.")
+        if st.checkbox("Saya yakin", key="reset_ok") and st.button("Hapus semua data", type="secondary"):
+            reset_all()
+            st.toast("Semua data transaksi dihapus.")
+            st.rerun()
+
+
+# ── main ────────────────────────────────────────────────────────────────────
+def main() -> None:
+    inject_css()
+
+    if not st.session_state.get("_auth"):
+        render_login()
+
+    ok, err = db_check()
     if not ok:
-        st.error("❌ Tidak bisa connect ke database")
-        st.code(error)
-        st.info("Cek Postgres / DATABASE_URL (di `.env` lokal atau Streamlit Cloud → Secrets), lalu jalankan `python sql/create_db.py` untuk setup awal.")
+        with st.container(key="login"):
+            st.markdown('<div class="login-h">Database tidak terjangkau</div>', unsafe_allow_html=True)
+            st.markdown('<p class="login-p">Cek <code>DATABASE_URL</code> di <code>.env</code> lokal atau Streamlit Cloud → Secrets.</p>', unsafe_allow_html=True)
+            st.code(err)
+            if st.button("Keluar"):
+                logout()
+                st.rerun()
         st.stop()
-    stats = get_stats()
-    st.title("🧾 AI Accounting — Dashboard Review Jurnal")
-    st.caption(f"Deterministic rules engine · DB `{db_label()}`")
 
-    # ── Pilih cabang (filter global) ──
-    branches = list_branches()
-    if branches:
-        branch_map = {"Semua cabang": None}
-        for b in branches:
-            label = f"{b['branch_code']} — {b['branch_name']}"
-            if b["city"]:
-                label += f" · {b['city']}"
-            if not b["is_active"]:
-                label += " (nonaktif)"
-            branch_map[label] = b["branch_code"]
-        picked_branch = st.selectbox("🏪 Cabang", list(branch_map), label_visibility="collapsed")
-        branch_code = branch_map[picked_branch]
-        stats = get_stats(branch_code)
-    else:
-        branch_code = None
-        st.info("Tabel `branches` belum ada di DB ini — filter cabang nonaktif. Jalankan `sql/003_branches.sql` untuk multi-cabang.")
+    page = render_sidebar()
+    branches = [b for b in list_branches() if b["is_active"]]
+    branch_code = render_topbar(page, branches, st.session_state.get("branch_code"))
 
-    cols = st.columns(6)
-    cols[0].metric("Raw transaksi", stats["raw_transactions"])
-    cols[1].metric("⏳ Pending", stats["pending"])
-    cols[2].metric("✅ Approved", stats["approved"])
-    cols[3].metric("❌ Rejected", stats["rejected"])
-    cols[4].metric("🔄 Synced", stats["synced"])
-    cols[5].metric("Turnover", rp(stats["turnover"]))
-    st.markdown("---")
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 Review Draft", "📚 COA", "🛠 Demo & Utils", "🏪 Kelola Cabang"])
-    with tab1:
-        page_drafts(branch_code=branch_code)
-    with tab2:
-        page_coa()
-    with tab3:
-        page_utils()
-    with tab4:
-        page_branches()
-    st.sidebar.markdown("### Accurate Online")
-    st.sidebar.warning("⛔ Push belum aktif — API Accurate Online belum diberikan.")
-    st.sidebar.button("🚀 Push ke Accurate Online", disabled=True, width="stretch")
-    st.sidebar.caption("Engine: rules-engine-v1 · Reviewer: nizar")
+    with st.container(key="content"):
+        render_kpis(get_stats(branch_code), len(branches))
+        if page == "review":
+            page_review(branch_code)
+        elif page == "coa":
+            page_coa()
+        elif page == "branches":
+            page_branches()
+        else:
+            page_utils()
 
 
 main()

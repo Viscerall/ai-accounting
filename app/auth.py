@@ -62,8 +62,8 @@ def require_login() -> None:
 
     _, col, _ = st.columns([1, 1.4, 1])
     with col:
-        st.markdown("## 🧾 AI Accounting")
-        st.caption("Area terbatas — masukkan password untuk melanjutkan.")
+        st.markdown("## ◧ Dawend")
+        st.caption("Dawend · Area terbatas — masukkan password untuk melanjutkan.")
 
         if not expected:
             st.error(

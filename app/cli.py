@@ -65,7 +65,7 @@ def approve_draft(draft_id: int, reviewer: str = "nizar"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CLI untuk AI Accounting")
+    parser = argparse.ArgumentParser(description="CLI untuk Dawend")
     subparsers = parser.add_subparsers(dest="cmd", required=True)
 
     # ingest

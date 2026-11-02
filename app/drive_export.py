@@ -25,7 +25,7 @@ from app.db import get_conn, list_drafts, get_stats
 # ──────────────────────────────────────────────────────────────────────
 # Konfigurasi Drive
 # ──────────────────────────────────────────────────────────────────────
-DRIVE_FOLDER_NAME = "AI Accounting Reports"
+DRIVE_FOLDER_NAME = "Dawend Reports"
 SCOPES = ["drive.file", "drive"]
 
 # Google API CLI wrapper (pakai token ~/.hermes/google_token.json)
@@ -96,7 +96,7 @@ def make_excel(drafts: list[dict], out_path: Path) -> None:
     ws.title = "Ringkasan"
 
     # Title block
-    ws.cell(row=1, column=1, value="AI Accounting — Jurnal Mingguan").font = TITLE_FONT
+    ws.cell(row=1, column=1, value="Dawend — Jurnal Mingguan").font = TITLE_FONT
     ws.cell(row=2, column=1, value=f"Export: {date.today().strftime('%d %B %Y')}").font = SUB_FONT
     scope = f"Draft approved (latest {len(drafts)})" if drafts else "Tidak ada draft"
     ws.cell(row=3, column=1, value=scope).font = SUB_FONT
