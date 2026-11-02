@@ -11,8 +11,9 @@ google_token.json
 __pycache__/
 *.py[cod]
 *.egg-info/
+.env
+.env.supabase
 .venv/
-venv/
 env/
 
 # === Test & tooling cache ===
