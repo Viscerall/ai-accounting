@@ -61,15 +61,24 @@ File itu **idempotent** — aman di-run dua kali, tidak error.
    - Region: **Southeast Asia (Singapore)** — paling dekat ke Indonesia
    - Plan: **Free**
 3. Tunggu ±2 menit sampai project siap.
-4. Ambil connection string: **Project Settings → Database → Connection string → URI**.
+4. Ambil connection string lewat tombol **Connect** di **bar atas halaman project**
+   (bukan di Project Settings — sejak UI baru, menu di sana tidak punya opsi "Database").
+   Link langsung: <https://supabase.com/dashboard/project/_?showConnect=true&method=session>
+
+   Di panel Connect: pilih **Direct** → tab **Session pooler** → format **URI**.
    Bentuknya:
 
    ```
    postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
    ```
 
-   Tambahkan `?sslmode=require` di belakangnya. Kalau mau pakai **Session pooler**
-   (lebih tahan idle), pilih tab *Session pooler* di halaman yang sama.
+   **Wajib Session pooler, bukan Direct connection.** Direct connection sekarang
+   IPv6-only; Streamlit Community Cloud jalan di IPv4, jadi app akan gagal connect.
+
+   Huruf `$` di password aman apa adanya di dalam string. Tapi karakter ini **harus**
+   di-encode: `@`→`%40`, `#`→`%23`, `?`→`%3F`, `/`→`%2F`, `:`→`%3A`, `&`→`%26`,
+   `%`→`%25`, spasi→`%20`. Paling gampang: bikin database password dari huruf+angka saja.
+   Tambahkan `?sslmode=require` di belakang string.
 
 > **Storage**: free tier Supabase = 500 MB database. Data jurnal teks (nominal + kode akun)
 > sangat kecil — 1 transaksi ± 1–2 KB. Artinya ± 250.000–500.000 transaksi.
@@ -158,6 +167,59 @@ Supaya tetap jalan, laptop harus nyala hari Minggu. Kalau mati, jalankan manual:
 python scripts/weekly_export.py --force
 ```
 
+## 🛠 Akses DB lewat DBeaver
+
+DBeaver (Community, gratis) sudah terinstall di laptop: `C:/Users/nizar/AppData/Local/DBeaver`.
+Ada **dua** database yang bisa dibuka — jangan ketuker:
+
+### A. Lokal (Postgres 18 di laptop)
+
+| Field | Nilai |
+|---|---|
+| Host | `localhost` |
+| Port | `5432` |
+| Database | `ai_accounting` |
+| User | `postgres` |
+| Password | password Postgres lokal (bukan password Supabase) |
+| SSL | **OFF** |
+
+Isi tabel: `chart_of_accounts`, `raw_transactions`, `journal_drafts`,
+`journal_draft_items`, `raw_bank_statements`, `daily_cash_counts`, `audit_log`.
+
+### B. Supabase (cloud — ini yang dipakai web app)
+
+New Database Connection → **PostgreSQL**, lalu:
+
+| Field | Nilai |
+|---|---|
+| Host | `aws-0-ap-southeast-1.pooler.supabase.com` |
+| Port | `5432` (**Session pooler**) |
+| Database | `postgres` |
+| User | `postgres.<PROJECT_REF>` |
+| Password | password DB Supabase (waktu bikin project) |
+| SSL | **ON** → `sslmode = require` |
+
+`PROJECT_REF` ada di Supabase → **Settings → General → Reference ID**
+(bisa juga dibaca dari connection string di tombol **Connect**).
+
+Ambil string lengkapnya: Supabase → tombol **Connect** (bar atas project) →
+**Session pooler** → tab **URI**:
+
+```
+postgresql://postgres.PROJECT_REF:***@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres?sslmode=require
+```
+
+**Dua jebakan yang sering bikin gagal connect:**
+
+- **Transaction pooler (port 6543)** tidak cocok untuk DBeaver — dia tidak mendukung
+  prepared statement / fitur session yang dipakai client tools. Pakai **5432**.
+- **Direct connection** (`db.<ref>.supabase.co:5432`) sekarang **IPv6-only** → sering
+  timeout dari jaringan biasa. Selalu pakai host `*.pooler.supabase.com`.
+
+Password DB Supabase **tidak disimpan di repo** (cuma ada di Streamlit Secrets).
+Kalau lupa: Supabase → Settings → Database → **Reset database password**, lalu update
+juga `DATABASE_URL` di Streamlit Secrets (dan `.env` lokal kalau dipakai).
+
 ## Batasan free tier (biar tidak kaget)
 
 | Limit | Nilai | Dampak |
@@ -181,3 +243,19 @@ python scripts/weekly_export.py --force
 **Tabel kosong di cloud padahal lokal ada data**
 → Lokal pakai Postgres localhost, cloud pakai Supabase. Dua database terpisah.
 Untuk pindah data: `pg_dump` lokal lalu restore ke Supabase, atau input ulang via dashboard.
+
+**`Invalid format: please enter valid TOML` di Streamlit Secrets**
+→ Ada Enter/baris baru di tengah `DATABASE_URL`. TOML tidak mengizinkan string
+terpotong baris. Pastikan satu variabel = satu baris fisik, dan pakai petik satu `'`
+supaya `$` aman:
+```
+DATABASE_URL = 'postgresql://...?sslmode=require'
+```
+Tampilan boleh ter-*wrap* ke bawah di layar HP — yang dilarang itu karakter Enter asli.
+
+**SQL Editor minta konfirmasi "Run and enable RLS"**
+→ Pilih **Run and enable RLS** (tombol hijau). Tanpa RLS, tabel di schema `public`
+bisa dibaca/ditulis siapa pun lewat REST API Supabase memakai `anon` key yang publik.
+App kita tidak terpengaruh: dia konek sebagai role `postgres` (pemilik tabel),
+dan pemilik tabel otomatis bypass RLS.
+
