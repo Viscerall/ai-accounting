@@ -11,6 +11,7 @@ import os
 import traceback
 import uuid
 from decimal import Decimal, InvalidOperation
+from html import escape as esc
 from pathlib import Path
 
 import pandas as pd
@@ -136,384 +137,349 @@ CSS = """
 
 :root{
   --ground:#fbf7f8; --surface:#ffffff; --raised:#f3f4f6; --border:#e5e7eb;
-  --rule:#f2f2f2; --control:#d1d5db; --text:#111827; --muted:#5f6672;
+  --rule:#f2f2f2; --divider:#eceef1; --control:#d1d5db; --text:#111827; --muted:#5f6672;
   --accent:#b8336a; --accent-soft:#fdf2f7; --accent-track:#f8dbe8; --accent-ink:#6b1d3e;
   --positive:#247b50; --negative:#c4242a; --warning:#92400e;
-  --r-card:8px; --r-ctl:6px; --row:45px; --gap:24px; --pad:24px; --ctl-h:32px;
+  /* one spacing scale for every viewport */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --r-card:8px; --r-ctl:6px; --row:48px; --gap:var(--s4);
+  --pad:var(--s5); --ctl-h:36px;
 }
+@media (max-width:900px){ :root{ --pad:var(--s4); --ctl-h:40px; } }
 
 html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"]{
   font-family:"DM Sans", Inter, system-ui, sans-serif;
   -webkit-font-smoothing:antialiased;
 }
-[data-testid="stAppViewContainer"]{ background:var(--ground); color:var(--text); }
+[data-testid="stAppViewContainer"]{ background:var(--ground); color:var(--text); font-size:14px; line-height:1.5; }
+[data-testid="stMarkdownContainer"] p{ font-size:14px; }
 #MainMenu, footer{ display:none !important; }
-[data-testid="stToolbar"]{ display:none !important; }
-[data-testid="stDecoration"]{ display:none !important; }
-[data-testid="stStatusWidget"]{ display:none !important; }
-/* The app header also hosts the sidebar toggle. Hide it on desktop only —
-   on phones it is the only way to open the menu. */
-@media (min-width:901px){
-  header[data-testid="stHeader"]{ display:none !important; }
-}
+[data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"]{ display:none !important; }
+
+/* header hosts the sidebar opener: hidden on desktop, a slim bar on phones */
+@media (min-width:901px){ header[data-testid="stHeader"]{ display:none !important; } }
 @media (max-width:900px){
   header[data-testid="stHeader"]{
-    display:block !important; background:transparent !important;
-    box-shadow:none !important; height:auto !important;
+    display:block !important; position:fixed; height:48px !important;
+    background:var(--ground) !important; border-bottom:1px solid var(--rule); box-shadow:none !important;
   }
-  [data-testid="stSidebarCollapsedControl"]{ display:flex !important; visibility:visible !important; }
-  [data-testid="stSidebarCollapsedControl"] button{ color:var(--accent) !important; }
+  header[data-testid="stHeader"]::after{
+    content:"Dawend"; position:absolute; left:56px; top:50%; transform:translateY(-50%);
+    font-weight:700; font-size:15px; letter-spacing:-0.015em; color:var(--text);
+  }
+  [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"]{
+    display:flex !important; visibility:visible !important;
+  }
+  [data-testid="stSidebarCollapsedControl"] button, [data-testid="stExpandSidebarButton"]{ color:var(--accent) !important; }
+  [data-testid="stMain"] .block-container, [data-testid="stAppViewContainer"] .block-container{
+    padding-top:48px !important;
+  }
 }
 
-/* ── frame: no global padding, we pad ourselves ── */
+/* ── frame ── */
 [data-testid="stMain"] .block-container,
-[data-testid="stAppViewContainer"] .block-container{
-  padding:0 !important; max-width:100% !important;
-}
+[data-testid="stAppViewContainer"] .block-container{ padding:0 !important; max-width:100% !important; }
 [data-testid="stSidebar"]{ background:var(--ground) !important; border-right:1px solid var(--rule); }
 [data-testid="stSidebar"] > div{ background:transparent; }
 [data-testid="stSidebarUserContent"]{ padding:22px 14px 18px !important; }
 [data-testid="stSidebarCollapseButton"] button{ color:var(--muted) !important; }
 
-/* ── type ── */
 h1,h2,h3,h4,h5{ font-family:"DM Sans",sans-serif; color:var(--text); letter-spacing:-0.01em; }
-p, span, div, label, li{ font-size:14px; }
 code, .mono{ font-variant-numeric:tabular-nums; }
 
-/* ── sidebar brand ── */
+/* ── brand ── */
 .brand{ display:flex; align-items:center; gap:9px; margin:2px 0 26px 2px; }
 .brand .mark{
-  width:26px; height:26px; border-radius:7px; background:var(--accent);
-  color:#fff; font-weight:700; font-size:13px; display:flex;
-  align-items:center; justify-content:center; flex:0 0 auto;
+  width:26px; height:26px; border-radius:7px; background:var(--accent); color:#fff;
+  font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; flex:0 0 auto;
 }
 .brand .name{ font-weight:700; font-size:15px; line-height:1.1; letter-spacing:-0.015em; }
 .brand .scope{ font-size:12px; color:var(--muted); line-height:1.3; }
-
 .nav-label{ font-size:12px; color:var(--muted); margin:0 0 6px 10px; }
 
-/* ── sidebar nav radio → nav rows ── */
-.st-key-nav_radio [data-testid="stRadio"] > label{ display:none; }
-.st-key-nav_radio [role="radiogroup"]{ gap:1px; display:flex; flex-direction:column; }
-.st-key-nav_radio label[data-baseweb="radio"]{
-  height:38px; padding:0 10px; border-radius:var(--r-ctl);
-  display:flex; align-items:center; gap:0; cursor:pointer;
-  transition:background .12s ease, color .12s ease; margin:0;
-}
-.st-key-nav_radio label[data-baseweb="radio"] > div:first-child{ display:none !important; }
-.st-key-nav_radio label[data-baseweb="radio"] p,
-.st-key-nav_radio label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] p{
-  font-size:14px; font-weight:400; color:var(--text); margin:0;
-}
-.st-key-nav_radio label[data-baseweb="radio"]:hover{ background:var(--raised); }
-.st-key-nav_radio label[data-baseweb="radio"]:has(input:checked){ background:var(--accent-soft); }
-.st-key-nav_radio label[data-baseweb="radio"]:has(input:checked) p{
-  color:var(--accent-ink); font-weight:500;
+/* ── radios used as nav / tabs / queue: hide the circle whatever the DOM order is ── */
+/* Streamlit 1.66: label[data-testid="stRadioOption"] > div (content row) > div:first-child (circle) */
+.st-key-nav_radio label[data-testid="stRadioOption"] > div > div:first-child,
+.st-key-nav_mobile_wrap label[data-testid="stRadioOption"] > div > div:first-child,
+.st-key-status_tabs label[data-testid="stRadioOption"] > div > div:first-child,
+.st-key-rail_radio label[data-testid="stRadioOption"] > div > div:first-child{
+  display:none !important;
 }
 
-/* ── sidebar footer ── */
-.side-foot{ margin-top:22px; padding-top:14px; border-top:1px solid var(--rule); }
-.side-foot .kv{ display:flex; justify-content:space-between; gap:12px; font-size:12px; line-height:1.9; }
-.side-foot .k{ color:var(--muted); flex:0 0 auto; }
-.side-foot .v{
-  color:var(--text); text-align:right; overflow:hidden;
-  text-overflow:ellipsis; white-space:nowrap;
+/* ── sidebar nav ── */
+.st-key-nav_radio [role="radiogroup"]{ gap:1px; display:flex; flex-direction:column; }
+.st-key-nav_radio label[data-testid="stRadioOption"]{
+  height:38px; padding:0 10px; border-radius:var(--r-ctl); display:flex; align-items:center;
+  cursor:pointer; transition:background .12s ease; margin:0;
 }
-.side-foot .dot{ color:var(--positive); }
+.st-key-nav_radio label[data-testid="stRadioOption"] p{ font-size:14px; font-weight:400; color:var(--text); margin:0; }
+.st-key-nav_radio label[data-testid="stRadioOption"]:hover{ background:var(--raised); }
+.st-key-nav_radio label[data-testid="stRadioOption"]:has(input:checked){ background:var(--accent-soft); }
+.st-key-nav_radio label[data-testid="stRadioOption"]:has(input:checked) p{ color:var(--accent-ink); font-weight:500; }
+
+/* ── sidebar footer (one markdown block, so these selectors now match) ── */
+.side-foot{ margin:var(--s5) 0 var(--s3); padding-top:var(--s3); border-top:1px solid var(--rule); }
+.side-foot .kv{ display:flex; justify-content:space-between; align-items:baseline; gap:var(--s3); font-size:12px; line-height:1.9; }
+.side-foot .k{ color:var(--muted); flex:0 0 auto; }
+.side-foot .v{ color:var(--text); text-align:right; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 [data-testid="stSidebar"] .stButton button{
-  width:100%; justify-content:flex-start; height:32px; padding:0 10px;
-  background:transparent; border:1px solid var(--border); border-radius:var(--r-ctl);
-  color:var(--muted); font-size:13px; font-weight:400; box-shadow:none;
+  width:100%; justify-content:flex-start; padding:0 10px;
+  background:transparent; border:1px solid var(--border); color:var(--muted); font-weight:400;
 }
-[data-testid="stSidebar"] .stButton button:hover{
-  background:var(--surface); border-color:var(--control); color:var(--text);
-}
+[data-testid="stSidebar"] .stButton button:hover{ background:var(--surface); border-color:var(--control); color:var(--text); }
 
-/* ── top bar ── */
+/* ── top bar: one grid, same edges as content ── */
 .st-key-topbar{ border-bottom:1px solid var(--rule); padding:0 var(--pad) !important; }
-.st-key-topbar [data-testid="stHorizontalBlock"]{ height:64px; align-items:center; }
+.st-key-topbar [data-testid="stHorizontalBlock"]{
+  display:grid !important; grid-template-columns:minmax(0,1fr) minmax(200px,280px);
+  gap:var(--s4) !important; align-items:center; min-height:64px;
+}
+.st-key-topbar [data-testid="stColumn"]{ width:auto !important; min-width:0 !important; flex:none !important; }
 .tb-title{ font-size:17px; font-weight:500; letter-spacing:-0.01em; line-height:1.2; }
-.tb-sub{ font-size:12px; color:var(--muted); line-height:1.3; margin-top:1px; }
-.tb-sep{ border-left:1px solid var(--rule); height:32px; }
-.st-key-topbar .stSelectbox{ max-width:280px; margin-left:auto; }
+.tb-sub{ font-size:12px; color:var(--muted); line-height:1.3; margin-top:2px; }
 .st-key-topbar .stSelectbox label{ display:none; }
 
-/* ── content ── */
-.st-key-content{ padding:22px var(--pad) 40px !important; }
+/* ── content: one padding, one vertical gap ── */
+.st-key-content{ padding:var(--s5) var(--pad) var(--s6) !important; gap:var(--s4) !important; }
+.st-key-detail{ gap:var(--s4) !important; }
 
-/* ── KPI container: one panel, equal cells, 1px dividers ── */
+/* ── KPI: grid, 1px divider via gap, equal cells, fixed rows ── */
 .kpis{
-  display:grid; grid-template-columns:repeat(4, minmax(0,1fr));
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--r-card); overflow:hidden; margin:0 0 22px;
+  display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); grid-auto-rows:1fr; gap:1px;
+  background:var(--divider); border:1px solid var(--border); border-radius:var(--r-card); overflow:hidden; margin:0;
 }
 .kpi{
-  display:flex; flex-direction:column; justify-content:center;
-  padding:14px 18px 15px; border-right:1px solid var(--rule); min-width:0;
+  container-type:inline-size; min-width:0; background:var(--surface);
+  display:grid; grid-template-rows:18px 32px 1fr; row-gap:var(--s1); padding:var(--s4);
 }
-.kpi:last-child{ border-right:0; }
-.kpi .lab{ font-size:12px; color:var(--muted); margin-bottom:5px; line-height:1.35; }
+.kpi .lab{ font-size:12px; color:var(--muted); line-height:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .kpi .val{
-  font-size:24px; font-weight:500; letter-spacing:-0.02em;
-  font-variant-numeric:tabular-nums; line-height:1.15;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:clamp(16px, 11cqi, 24px); font-weight:500; letter-spacing:-0.02em; line-height:32px;
+  font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .kpi .val.hue{ color:var(--accent); }
-.kpi .cap{ font-size:12px; color:var(--muted); margin-top:4px; line-height:1.35; }
-
-/* ── status tabs (underline, 2px indicator) ── */
-.st-key-status_tabs [data-testid="stRadio"] > label{ display:none; }
-.st-key-status_tabs [role="radiogroup"]{
-  border-bottom:1px solid var(--rule); gap:0; padding:0;
+.kpi .cap{
+  font-size:12px; color:var(--muted); line-height:1.35;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
 }
-.st-key-status_tabs label[data-baseweb="radio"]{
-  padding:0 0 9px; margin:0 22px 0 0; border-radius:0; position:relative;
+
+/* ── status tabs ── */
+.st-key-status_tabs{ margin-bottom:var(--s1); }
+.st-key-status_tabs [role="radiogroup"]{
+  border-bottom:1px solid var(--rule); gap:0; padding:0; flex-wrap:nowrap;
+  overflow-x:auto; scrollbar-width:none;
+}
+.st-key-status_tabs [role="radiogroup"]::-webkit-scrollbar{ display:none; }
+.st-key-status_tabs label[data-testid="stRadioOption"]{
+  flex:0 0 auto; padding:0 0 var(--s3); margin:0 var(--s5) 0 0; border-radius:0; position:relative;
   background:transparent !important; cursor:pointer;
 }
-.st-key-status_tabs label[data-baseweb="radio"] > div:first-child{ display:none !important; }
-.st-key-status_tabs label[data-baseweb="radio"] p{
-  font-size:13px; font-weight:400; color:var(--muted); margin:0;
-}
-.st-key-status_tabs label[data-baseweb="radio"]:hover p{ color:var(--text); }
-.st-key-status_tabs label[data-baseweb="radio"]:has(input:checked) p{
-  color:var(--text); font-weight:500;
-}
-.st-key-status_tabs label[data-baseweb="radio"]:has(input:checked)::after{
-  content:""; position:absolute; left:0; right:0; bottom:-1px;
-  height:2px; background:var(--accent); border-radius:2px 2px 0 0;
+.st-key-status_tabs label[data-testid="stRadioOption"] p{ font-size:13px; font-weight:400; color:var(--muted); margin:0; white-space:nowrap; }
+.st-key-status_tabs label[data-testid="stRadioOption"]:hover p{ color:var(--text); }
+.st-key-status_tabs label[data-testid="stRadioOption"]:has(input:checked) p{ color:var(--text); font-weight:500; }
+.st-key-status_tabs label[data-testid="stRadioOption"]:has(input:checked)::after{
+  content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px;
+  background:var(--accent); border-radius:2px 2px 0 0;
 }
 
 /* ── queue rail ── */
-.st-key-rail{ background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--r-card); overflow:hidden; }
-.rail-head{ padding:11px 14px; border-bottom:1px solid var(--rule);
-  display:flex; justify-content:space-between; align-items:baseline; }
+.st-key-rail{ background:var(--surface); border:1px solid var(--border); border-radius:var(--r-card); overflow:hidden; min-height:160px; gap:0 !important; }
+.rail-head{ padding:var(--s3) var(--s4); border-bottom:1px solid var(--rule); display:flex; justify-content:space-between; align-items:baseline; }
 .rail-head .t{ font-size:13px; font-weight:500; }
 .rail-head .c{ font-size:12px; color:var(--muted); }
-
-.st-key-rail_radio [data-testid="stRadio"] > label{ display:none; }
 .st-key-rail_radio [role="radiogroup"]{ gap:0; display:flex; flex-direction:column; }
-.st-key-rail_radio label[data-baseweb="radio"]{
-  min-height:var(--row); padding:8px 14px; border-radius:0; margin:0;
+.st-key-rail_radio label[data-testid="stRadioOption"]{
+  min-height:var(--row); padding:var(--s3) var(--s4); margin:0; border-radius:0;
   border-bottom:1px solid var(--rule); display:flex; align-items:center;
   cursor:pointer; transition:background .12s ease; background:transparent;
 }
-.st-key-rail_radio label[data-baseweb="radio"]:last-child{ border-bottom:0; }
-.st-key-rail_radio label[data-baseweb="radio"] > div:first-child{ display:none !important; }
-.st-key-rail_radio label[data-baseweb="radio"] p{
-  font-size:13px; font-weight:400; color:var(--text); margin:0;
-  font-variant-numeric:tabular-nums; white-space:nowrap;
-  overflow:hidden; text-overflow:ellipsis;
+.st-key-rail_radio label[data-testid="stRadioOption"]:last-child{ border-bottom:0; }
+.st-key-rail_radio label[data-testid="stRadioOption"] p{
+  font-size:13px; line-height:1.4; color:var(--text); margin:0;
+  font-variant-numeric:tabular-nums; white-space:normal; overflow-wrap:break-word;
 }
-.st-key-rail_radio label[data-baseweb="radio"]:hover{ background:var(--raised); }
-.st-key-rail_radio label[data-baseweb="radio"]:has(input:checked){ background:var(--accent-soft); }
-.st-key-rail_radio label[data-baseweb="radio"]:has(input:checked) p{
-  color:var(--accent-ink); font-weight:500;
+.st-key-rail_radio label[data-testid="stRadioOption"]:hover{ background:var(--raised); }
+.st-key-rail_radio label[data-testid="stRadioOption"]:has(input:checked){ background:var(--accent-soft); }
+.st-key-rail_radio label[data-testid="stRadioOption"]:has(input:checked) p{ color:var(--accent-ink); }
+.rail-empty{ padding:var(--s6) var(--s4); text-align:center; color:var(--muted); font-size:13px; line-height:1.6; }
+
+/* ── detail head ── */
+.d-head .row1{ display:flex; align-items:center; gap:var(--s3); flex-wrap:wrap; }
+.d-head .no{ font-size:17px; font-weight:500; letter-spacing:-0.01em; overflow-wrap:anywhere; }
+.d-head .amt{
+  font-size:30px; font-weight:500; letter-spacing:-0.03em; color:var(--accent);
+  font-variant-numeric:tabular-nums; line-height:1; margin:var(--s3) 0 var(--s4);
 }
+.meta-grid{
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--s3) var(--s4);
+  padding-top:var(--s4); border-top:1px solid var(--rule);
+}
+.meta-grid .k{ display:block; font-size:12px; color:var(--muted); margin-bottom:2px; }
+.meta-grid .v{ display:block; font-size:13px; font-weight:500; overflow-wrap:anywhere; }
 
-.rail-empty{ padding:34px 18px; text-align:center; color:var(--muted); font-size:13px; line-height:1.6; }
-
-/* ── detail ── */
-.st-key-detail{ padding-top:2px; }
-.d-head .row1{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-.d-head .no{ font-size:17px; font-weight:500; letter-spacing:-0.01em; }
-.d-head .meta{ font-size:12px; color:var(--muted); margin-top:5px; line-height:1.7; }
-.d-head .meta b{ color:var(--text); font-weight:500; }
-.d-head .amt{ font-size:30px; font-weight:500; letter-spacing:-0.03em;
-  color:var(--accent); font-variant-numeric:tabular-nums; margin-top:12px; line-height:1; }
-
-.pill{ display:inline-block; padding:3px 9px; border-radius:999px;
-  font-size:11px; font-weight:500; line-height:1.35; white-space:nowrap; }
+.pill{ display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:500; line-height:1.35; white-space:nowrap; }
 .pill-positive{ background:#dcfce7; color:#14532d; }
 .pill-negative{ background:#ffedea; color:#831c1e; }
 .pill-warning{ background:#fffbeb; color:#92400e; }
 .pill-neutral{ background:#f3f4f6; color:#374151; }
 .pill-accent{ background:var(--accent-soft); color:var(--accent-ink); }
 
-/* ── tables: no card, no fill on header ── */
+/* ── totals strip: grid, same card language as KPI ── */
+.totals{
+  display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px;
+  background:var(--divider); border:1px solid var(--border); border-radius:var(--r-card); overflow:hidden; margin:0;
+}
+.totals .cell{ background:var(--surface); padding:var(--s3) var(--s4); min-width:0; }
+.totals .lab{ font-size:12px; color:var(--muted); margin-bottom:var(--s1); }
+.totals .val{ font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.totals .state{ display:flex; align-items:center; gap:var(--s2); }
+
+/* ── journal table: ONE table at every width, card edges match KPI/totals ── */
+.jt-wrap{
+  width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; margin:0;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--r-card);
+}
+.jt-wrap table.jt{ min-width:640px; }
 table.jt, table.plain{ width:100%; border-collapse:collapse; }
 table.jt th, table.plain th{
   font-size:12px; font-weight:400; color:var(--muted); text-align:left;
-  padding:10px 12px; border-bottom:1px solid var(--border); background:transparent;
-  white-space:nowrap;
+  padding:var(--s3); border-bottom:1px solid var(--border); background:transparent; white-space:nowrap;
 }
-table.jt td, table.plain td{
-  font-size:13px; padding:10px 12px; border-bottom:1px solid var(--rule);
-  vertical-align:middle;
-}
+table.jt td, table.plain td{ font-size:13px; padding:var(--s3); border-bottom:1px solid var(--rule); vertical-align:middle; }
 table.jt tr:last-child td, table.plain tr:last-child td{ border-bottom:0; }
-table.jt td.n, table.plain td.n, table.jt th.n, table.plain th.n{
-  text-align:right; font-variant-numeric:tabular-nums;
-}
+table.jt th:first-child, table.jt td:first-child{ padding-left:var(--s4); }
+table.jt th:last-child, table.jt td:last-child{ padding-right:var(--s4); }
+table.plain th:first-child, table.plain td:first-child{ padding-left:0; }
+table.plain th:last-child, table.plain td:last-child{ padding-right:0; }
+table.jt td.n, table.plain td.n, table.jt th.n, table.plain th.n{ text-align:right; font-variant-numeric:tabular-nums; }
 table.jt td.n{ font-weight:500; }
+table.jt td.desc{ color:var(--muted); white-space:normal; min-width:210px; }
+table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
 table.jt tbody tr:hover td{ background:var(--ground); }
-table.jt tfoot td{
-  font-size:13px; font-weight:500; padding:11px 12px;
-  border-top:1px solid var(--border); border-bottom:0; background:var(--surface);
-}
+table.jt tfoot td{ font-weight:500; border-top:1px solid var(--border); border-bottom:0; background:var(--surface); }
 table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
 .wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
-.wrap table.jt, .wrap table.plain{ min-width:640px; }
-/* the journal table keeps its desktop shape everywhere; phones scroll it sideways */
-.jt-wrap{ width:100%; overflow-x:auto; margin-top:16px; -webkit-overflow-scrolling:touch; }
-.jt-wrap table.jt{ min-width:640px; }
-table.jt td.desc{ color:var(--muted); white-space:normal; min-width:210px; }
-table.plain td.muted, table.jt td.muted{ color:var(--muted); }
-.table-cap{
-  font-size:12px; color:var(--muted); display:flex; justify-content:space-between;
-  align-items:baseline; gap:12px; margin:0 0 8px;
-}
 
-/* totals strip above the table: always visible, no scrolling needed */
-.totals{
-  display:flex; flex-wrap:wrap; gap:0; margin:18px 0 2px;
+/* ── panels / forms / empty states ── */
+.panel{ background:var(--surface); border:1px solid var(--border); border-radius:var(--r-card); padding:var(--s4) var(--s5); margin:0; }
+.panel h4{ font-size:14px; font-weight:500; margin:0 0 var(--s3); }
+.panel .hint{ font-size:12px; color:var(--muted); margin:0; line-height:1.6; }
+.sec-h{ font-size:14px; font-weight:500; letter-spacing:-0.005em; margin:0; }
+.row-name{ font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.st-key-content [data-testid="stForm"]{
+  border:1px solid var(--border); border-radius:var(--r-card); background:var(--surface); padding:var(--s4);
+}
+.st-key-u_samples, .st-key-u_upload, .st-key-u_calc, .st-key-u_drive{
   background:var(--surface); border:1px solid var(--border); border-radius:var(--r-card);
-  overflow:hidden;
+  padding:var(--s4) !important; gap:var(--s3) !important;
 }
-.totals .cell{ flex:1 1 0; min-width:150px; padding:12px 16px; border-right:1px solid var(--rule); }
-.totals .cell:last-child{ border-right:0; }
-.totals .lab{ font-size:12px; color:var(--muted); margin-bottom:4px; }
-.totals .val{ font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
-.totals .state{ display:flex; align-items:center; gap:8px; }
-table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
+.st-key-u_samples [data-testid="stHorizontalBlock"]{ flex-wrap:nowrap !important; align-items:center; gap:var(--s3) !important; }
+.st-key-u_samples [data-testid="stColumn"]{ min-width:0 !important; flex:1 1 0 !important; width:auto !important; }
+.st-key-u_samples [data-testid="stColumn"]:last-child{ flex:0 0 88px !important; }
+.st-key-u_calc [data-testid="stForm"]{ border:0; padding:0; background:transparent; }
+.st-key-u_calc [data-testid="stHorizontalBlock"]{ display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--s3) !important; }
+.st-key-u_calc [data-testid="stColumn"]{ width:auto !important; min-width:0 !important; flex:none !important; }
+.st-key-act_back{ max-width:260px; }
 
-
-/* ── panels for forms / secondary blocks ── */
-.panel{ background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--r-card); padding:18px 20px; margin-bottom:16px; }
-.panel h4{ font-size:14px; font-weight:500; margin:0 0 12px; letter-spacing:-0.005em; }
-.panel .hint{ font-size:12px; color:var(--muted); margin:-4px 0 12px; }
-
-/* ── form controls ── */
+/* ── controls: one height ── */
 [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input{
-  height:var(--ctl-h) !important; border-radius:var(--r-ctl) !important;
-  border-color:var(--border) !important; font-size:13px !important;
-  background:var(--surface) !important; color:var(--text) !important;
+  height:var(--ctl-h) !important; border-radius:var(--r-ctl) !important; border-color:var(--border) !important;
+  font-size:13px !important; background:var(--surface) !important; color:var(--text) !important;
 }
+[data-testid="stNumberInputContainer"], [data-testid="stNumberInput"] button{ height:var(--ctl-h) !important; min-height:var(--ctl-h) !important; }
 [data-testid="stTextInput"] input:focus, [data-testid="stNumberInput"] input:focus{
   border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-soft) !important;
 }
 [data-baseweb="select"] > div{
-  height:var(--ctl-h) !important; min-height:var(--ctl-h) !important;
-  border-radius:var(--r-ctl) !important; border-color:var(--border) !important;
-  background:var(--surface) !important; font-size:13px !important;
+  height:var(--ctl-h) !important; min-height:var(--ctl-h) !important; border-radius:var(--r-ctl) !important;
+  border-color:var(--border) !important; background:var(--surface) !important; font-size:13px !important;
 }
-[data-baseweb="select"]:focus-within > div{
-  border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-soft) !important;
-}
+[data-baseweb="select"]:focus-within > div{ border-color:var(--accent) !important; box-shadow:0 0 0 3px var(--accent-soft) !important; }
 [data-testid="stWidgetLabel"] label, .stTextInput label, .stSelectbox label, .stNumberInput label{
   font-size:12px !important; color:var(--muted) !important; font-weight:400 !important;
 }
-
-/* ── buttons ── */
 .stButton button, .stFormSubmitButton button, [data-testid="stLinkButton"] a{
-  height:32px; padding:0 14px; border-radius:var(--r-ctl);
+  height:var(--ctl-h); min-height:var(--ctl-h); padding:0 14px; border-radius:var(--r-ctl);
   font-size:13px; font-weight:500; box-shadow:none; transition:all .12s ease;
 }
-.stButton button[kind="primary"], .stFormSubmitButton button[kind="primary"]{
-  background:var(--accent); border:1px solid var(--accent); color:#fff;
-}
-.stButton button[kind="primary"]:hover, .stFormSubmitButton button[kind="primary"]:hover{
-  background:var(--accent-ink); border-color:var(--accent-ink); color:#fff;
-}
-.stButton button[kind="secondary"], .stFormSubmitButton button[kind="secondary"]{
-  background:var(--surface); border:1px solid var(--border); color:var(--text);
-}
-.stButton button[kind="secondary"]:hover{
-  background:var(--raised); border-color:var(--control);
-}
-.stButton button[kind="tertiary"]{
-  background:transparent; border:1px solid transparent; color:var(--muted);
-}
+.stButton button[kind="primary"], .stFormSubmitButton button[kind="primary"]{ background:var(--accent); border:1px solid var(--accent); color:#fff; }
+.stButton button[kind="primary"]:hover, .stFormSubmitButton button[kind="primary"]:hover{ background:var(--accent-ink); border-color:var(--accent-ink); color:#fff; }
+.stButton button[kind="secondary"], .stFormSubmitButton button[kind="secondary"]{ background:var(--surface); border:1px solid var(--border); color:var(--text); }
+.stButton button[kind="secondary"]:hover{ background:var(--raised); border-color:var(--control); }
+.stButton button[kind="tertiary"]{ background:transparent; border:1px solid transparent; color:var(--muted); }
 .stButton button[kind="tertiary"]:hover{ color:var(--text); background:var(--raised); }
-.stButton button:focus-visible, .stFormSubmitButton button:focus-visible{
-  outline:2px solid var(--accent); outline-offset:2px;
-}
+.stButton button:focus-visible, .stFormSubmitButton button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
 
-/* ── expander / captions / alerts ── */
-[data-testid="stExpander"] details{
-  border:1px solid var(--border); border-radius:var(--r-card);
-  background:var(--surface); overflow:hidden;
-}
-[data-testid="stExpander"] summary{ padding:11px 16px; font-size:13px; font-weight:400; }
+[data-testid="stExpander"] details{ border:1px solid var(--border); border-radius:var(--r-card); background:var(--surface); overflow:hidden; }
+[data-testid="stExpander"] summary{ padding:var(--s3) var(--s4); font-size:13px; font-weight:400; min-height:var(--ctl-h); }
 [data-testid="stExpander"] summary:hover{ background:var(--ground); }
-[data-testid="stExpander"] [data-testid="stExpanderDetails"]{ padding:0 16px 14px; }
-
+[data-testid="stExpander"] [data-testid="stExpanderDetails"]{ padding:0 var(--s4) var(--s4); }
 [data-testid="stCaptionContainer"] p, .stCaption p{ font-size:12px !important; color:var(--muted) !important; }
 [data-testid="stAlert"]{ border-radius:var(--r-card); font-size:13px; }
 
 /* ── login ── */
 .st-key-login{ max-width:372px; margin:14vh auto 0; }
-.st-key-login .brand{ margin-bottom:18px; }
+.st-key-login .brand{ margin-bottom:var(--s4); }
 .login-h{ font-size:22px; font-weight:500; letter-spacing:-0.02em; margin:0 0 6px; }
-.login-p{ font-size:13px; color:var(--muted); margin:0 0 20px; line-height:1.6; }
-.login-f{ font-size:12px; color:var(--muted); margin-top:18px; line-height:1.6; }
+.login-p{ font-size:13px; color:var(--muted); margin:0 0 var(--s5); line-height:1.6; }
+.login-f{ font-size:12px; color:var(--muted); margin-top:var(--s4); line-height:1.6; }
 
-/* ── mobile top nav (phones only): mirrors the sidebar menu ── */
-.st-key-nav_mobile_wrap{ display:none; }
-.st-key-nav_mobile_foot{ display:none; }
+/* ── mobile nav: hidden on desktop, swipeable pills on phones ── */
+.st-key-nav_mobile_wrap, .st-key-nav_mobile_foot{ display:none; }
+
 @media (max-width:900px){
-  .st-key-nav_mobile_wrap{ display:block; padding:0 12px !important; }
-  .st-key-nav_mobile_foot{ display:block; padding:0 12px !important; }
-  .mfoot{ font-size:11px; color:var(--muted); line-height:1.5; padding:2px 0; }
+  .st-key-nav_mobile_wrap{ display:block; padding:0 !important; }
+  .st-key-nav_mobile_foot{ display:block; padding:0 var(--pad) !important; }
+  .mfoot{ font-size:11px; color:var(--muted); line-height:1.5; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mfoot b{ color:var(--text); font-weight:500; }
-  .st-key-nav_mobile_foot .stButton button{
-    height:28px; font-size:12px; background:var(--surface);
-    border:1px solid var(--border); color:var(--muted);
-  }
-  .st-key-nav_mobile_wrap [data-testid="stRadio"] > label{ display:none; }
+  .st-key-nav_mobile_foot [data-testid="stHorizontalBlock"]{ flex-wrap:nowrap !important; align-items:center; gap:var(--s3) !important; }
+  .st-key-nav_mobile_foot [data-testid="stColumn"]{ min-width:0 !important; flex:1 1 0 !important; width:auto !important; }
+  .st-key-nav_mobile_foot [data-testid="stColumn"]:last-child{ flex:0 0 88px !important; }
+
   .st-key-nav_mobile_wrap [role="radiogroup"]{
-    display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;
-    padding:10px 0 10px; margin:0; border-bottom:1px solid var(--rule);
+    display:flex; flex-wrap:nowrap; gap:var(--s2); overflow-x:auto; scrollbar-width:none;
+    scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch;
+    padding:var(--s3) var(--pad); margin:0; border-bottom:1px solid var(--rule);
+    -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - var(--pad)),transparent);
+    mask-image:linear-gradient(90deg,#000 calc(100% - var(--pad)),transparent);
   }
   .st-key-nav_mobile_wrap [role="radiogroup"]::-webkit-scrollbar{ display:none; }
-  .st-key-nav_mobile_wrap label[data-baseweb="radio"]{
-    flex:0 0 auto; height:32px; padding:0 12px; margin:0; border-radius:999px;
+  .st-key-nav_mobile_wrap label[data-testid="stRadioOption"]{
+    flex:0 0 auto; height:36px; padding:0 var(--s4); margin:0; border-radius:999px;
     background:var(--surface) !important; border:1px solid var(--border);
-    display:flex; align-items:center; cursor:pointer;
+    display:flex; align-items:center; cursor:pointer; scroll-snap-align:start;
   }
-  .st-key-nav_mobile_wrap label[data-baseweb="radio"] > div:first-child{ display:none !important; }
-  .st-key-nav_mobile_wrap label[data-baseweb="radio"] p{ font-size:13px; color:var(--text); margin:0; }
-  .st-key-nav_mobile_wrap label[data-baseweb="radio"]:has(input:checked){
-    background:var(--accent-soft) !important; border-color:var(--accent-track);
-  }
-  .st-key-nav_mobile_wrap label[data-baseweb="radio"]:has(input:checked) p{
-    color:var(--accent-ink); font-weight:500;
-  }
-  /* sidebar menu stays desktop-only; phones use the pill nav above */
+  .st-key-nav_mobile_wrap label[data-testid="stRadioOption"] p{ font-size:13px; color:var(--text); margin:0; white-space:nowrap; }
+  .st-key-nav_mobile_wrap label[data-testid="stRadioOption"]:has(input:checked){ background:var(--accent-soft) !important; border-color:var(--accent-track); }
+  .st-key-nav_mobile_wrap label[data-testid="stRadioOption"]:has(input:checked) p{ color:var(--accent-ink); font-weight:500; }
   [data-testid="stSidebar"] .st-key-nav_radio{ display:none; }
-  .st-key-login{ max-width:100%; margin:6vh auto 0; padding:0 4px !important; }
-}
 
-/* ── phone ── */
-@media (max-width:900px){
-  .kpis{ grid-template-columns:repeat(2, minmax(0,1fr)); margin-bottom:18px; }
-  .kpi{ padding:12px 13px; min-height:88px; border-bottom:1px solid var(--rule); }
-  .kpi:nth-child(2n){ border-right:0; }
-  .kpi:nth-child(n+3){ border-bottom:0; }
-  .kpi .val{ font-size:20px; }
-  .kpi .cap{ font-size:11px; }
-  .st-key-content{ padding:14px 12px 28px !important; }
-  .st-key-topbar{ padding:0 12px !important; }
-  .st-key-topbar [data-testid="stHorizontalBlock"]{ height:auto; padding:8px 0 10px; gap:8px; }
-  .st-key-topbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child{ min-width:0; }
-  .st-key-topbar .tb-title{ font-size:16px; }
-  .st-key-topbar .tb-sub{ font-size:11px; }
-  .st-key-topbar .stSelectbox{ min-width:0; }
-  .st-key-topbar [data-baseweb="select"] > div{ max-width:145px; }
-  .st-key-status_tabs [role="radiogroup"]{ overflow-x:auto; scrollbar-width:none; }
-  .st-key-status_tabs label[data-baseweb="radio"]{ flex:0 0 auto; margin-right:18px; }
-  .st-key-rail{ margin-bottom:16px; }
-  .st-key-rail_radio label[data-baseweb="radio"]{ min-height:42px; }
-  .totals .cell{ min-width:50%; padding:11px 12px; }
-  .totals .cell:nth-child(2){ border-right:0; }
-  .totals .cell:nth-child(1), .totals .cell:nth-child(2){ border-bottom:1px solid var(--rule); }
+  .st-key-login{ max-width:100%; margin:6vh auto 0; padding:0 var(--s1) !important; }
+  .st-key-content{ padding-top:var(--s4) !important; }
+
+  /* same components, tighter internals; same 4px scale */
+  .kpis{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .kpi{ padding:var(--s3); }
+  .totals{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .totals .cell:nth-child(3){ grid-column:1 / -1; }
   .totals .val{ font-size:16px; }
-  .jt-wrap{ margin-top:12px; }
-  .d-head .amt{ font-size:25px; }
-  .d-head .meta{ font-size:11px; line-height:1.6; }
-  .st-key-detail .stButton button{ width:100%; }
+  .meta-grid{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .d-head .amt{ font-size:26px; }
+
+  .st-key-topbar{ padding:0 var(--pad) !important; }
+  .st-key-topbar [data-testid="stHorizontalBlock"]{ grid-template-columns:minmax(0,1fr); gap:var(--s3) !important; min-height:0; padding:var(--s3) 0; }
+  .st-key-detail [data-testid="stHorizontalBlock"]{ flex-wrap:nowrap !important; gap:var(--s2) !important; }
+  .st-key-detail [data-testid="stColumn"]{ min-width:0 !important; width:auto !important; flex:1 1 0 !important; }
+  .st-key-detail .stButton button{ width:100%; padding:0 var(--s2); }
+  .st-key-act_back{ max-width:100%; }
+
+  /* 16px stops iOS from zooming on focus */
+  [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-baseweb="select"] > div{ font-size:16px !important; }
+
+  /* plain tables (COA, Cabang, calculator result) scroll instead of overflowing the page */
+  table.plain{ display:block; max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  table.plain td, table.plain th{ white-space:nowrap; }
 }
 """
 
@@ -555,20 +521,18 @@ def render_sidebar(reviewer: str = "Tim Dawend") -> str:
             args=("nav_radio",),
         )
         active = st.session_state.get("page", st.session_state.get("nav_radio", keys[0]))
-
-        # Sidebar is the canonical desktop navigation; mobile gets a compact
-        # duplicate rendered in the main content area below.
         st.session_state["page"] = active
 
-        st.markdown('<div class="side-foot">', unsafe_allow_html=True)
+        # One markdown call: Streamlit cannot nest HTML across calls.
         st.markdown(
+            '<div class="side-foot">'
             '<div class="kv"><span class="k">Engine</span><span class="v">rules-engine-v1</span></div>'
-            '<div class="kv"><span class="k">Reviewer</span><span class="v">' + reviewer + '</span></div>'
-            f'<div class="kv"><span class="k">Database</span><span class="v">{db_label()}</span></div>'
-            '<div class="kv"><span class="k">Accurate</span><span class="v">belum aktif</span></div>',
+            f'<div class="kv"><span class="k">Reviewer</span><span class="v">{esc(reviewer)}</span></div>'
+            f'<div class="kv"><span class="k">Database</span><span class="v">{esc(str(db_label()))}</span></div>'
+            '<div class="kv"><span class="k">Accurate</span><span class="v">belum aktif</span></div>'
+            "</div>",
             unsafe_allow_html=True,
         )
-        st.markdown("</div>", unsafe_allow_html=True)
 
         if st.button("Keluar", key="logout", icon=":material/logout:"):
             logout()
@@ -579,7 +543,7 @@ def render_sidebar(reviewer: str = "Tim Dawend") -> str:
 
 # ── top bar ─────────────────────────────────────────────────────────────────
 def render_mobile_nav(reviewer: str = "Tim Dawend") -> None:
-    """Compact nav for phones — the sidebar is hidden by CSS under 900px."""
+    """Swipeable pill nav for phones; the sidebar menu is hidden by CSS under 900px."""
     keys = [k for k, _ in NAV]
     labels = dict(NAV)
     radio_default("nav_mobile", keys, st.session_state.get("page", keys[0]))
@@ -600,14 +564,15 @@ def render_mobile_nav(reviewer: str = "Tim Dawend") -> None:
         left, right = st.columns([3, 1], vertical_alignment="center")
         with left:
             st.markdown(
-                f'<div class="mfoot">Reviewer <b>{reviewer}</b>'
-                f' &nbsp;·&nbsp; DB <b>{db_label()}</b></div>',
+                f'<div class="mfoot">Reviewer <b>{esc(reviewer)}</b>'
+                f' &nbsp;·&nbsp; DB <b>{esc(str(db_label()))}</b></div>',
                 unsafe_allow_html=True,
             )
         with right:
             if st.button("Keluar", key="logout_m", width="stretch"):
-                logout()
-                st.rerun()
+                            logout()
+                            st.rerun()
+
 
 
 TITLES = {
@@ -651,33 +616,19 @@ def render_kpis(stats: dict, branch_count: int) -> None:
     pending = stats.get("pending", 0) or 0
     approved = stats.get("approved", 0) or 0
     turnover = stats.get("turnover", 0) or 0
-    st.markdown(
-        f"""
-<div class="kpis">
-  <div class="kpi">
-    <div class="lab">Transaksi masuk</div>
-    <div class="val">{num(raw)}</div>
-    <div class="cap">semua status, sepanjang waktu</div>
-  </div>
-  <div class="kpi">
-    <div class="lab">Menunggu review</div>
-    <div class="val hue">{num(pending)}</div>
-    <div class="cap">butuh keputusan</div>
-  </div>
-  <div class="kpi">
-    <div class="lab">Disetujui</div>
-    <div class="val">{num(approved)}</div>
-    <div class="cap">siap dikirim ke Accurate</div>
-  </div>
-  <div class="kpi">
-    <div class="lab">Turnover</div>
-    <div class="val">{rp(turnover)}</div>
-    <div class="cap">dari {raw} transaksi · {branch_count} cabang aktif</div>
-  </div>
-</div>
-""",
-        unsafe_allow_html=True,
+    cards = [
+        ("Transaksi masuk", num(raw), "", "semua status, sepanjang waktu"),
+        ("Menunggu review", num(pending), " hue", "butuh keputusan"),
+        ("Disetujui", num(approved), "", "siap dikirim ke Accurate"),
+        ("Turnover", rp(turnover), "", f"dari {num(raw)} transaksi · {num(branch_count)} cabang aktif"),
+    ]
+    body = "".join(
+        f'<div class="kpi"><div class="lab">{lab}</div>'
+        f'<div class="val{cls}" title="{val}">{val}</div>'
+        f'<div class="cap">{cap}</div></div>'
+        for lab, val, cls, cap in cards
     )
+    st.markdown(f'<div class="kpis">{body}</div>', unsafe_allow_html=True)
 
 
 # ── review page ─────────────────────────────────────────────────────────────
@@ -745,10 +696,12 @@ def page_review(branch_code: str | None) -> None:
 
 
 def _rail_label(r: dict) -> str:
-    return (
-        f"{r['draft_no']}  ·  {rp(r['total_debit'])}  ·  "
-        f"{r.get('branch_code') or '—'}  ·  {r['business_date']}"
-    )
+    """Line 1 = draft id (bold). Line 2 = amount · branch · date (gray)."""
+    date = str(r["business_date"]).replace("-", "\u2011")  # non-breaking hyphen: no mid-date wrap
+    parts = [rp(r["total_debit"]), r.get("branch_code") or "—", date]
+    if st.session_state.get("status_tab") == "ALL":
+        parts.append(PILL.get(r["status"], (r["status"], ""))[0])
+    return f"**{r['draft_no']}**  \n:gray[{' · '.join(parts)}]"
 
 
 def render_detail(draft: dict) -> None:
@@ -756,21 +709,28 @@ def render_detail(draft: dict) -> None:
     branch = f"{draft.get('branch_code') or '—'} · {draft.get('branch_name') or '—'}"
     reviewer = draft.get("reviewed_by")
     reviewed_at = draft.get("reviewed_at")
-    reviewed_txt = ""
     if reviewer:
-        when = reviewed_at.strftime("%d %b %Y %H:%M") if hasattr(reviewed_at, "strftime") else reviewed_at
-        reviewed_txt = f" &nbsp;·&nbsp; direview <b>{reviewer}</b> {when}"
+        when = reviewed_at.strftime("%d %b %Y %H:%M") if hasattr(reviewed_at, "strftime") else (reviewed_at or "")
+        reviewed_txt = f"{esc(str(reviewer))} · {when}"
+    else:
+        reviewed_txt = "—"
+    confidence = draft.get("confidence")
+    meta = [
+        ("Invoice", esc(str(draft["external_id"]))),
+        ("Tanggal", esc(str(draft["business_date"]))),
+        ("Cabang", esc(branch)),
+        ("Engine", esc(str(draft.get("ai_model") or "—"))),
+        ("Confidence", "—" if confidence is None else esc(str(confidence))),
+        ("Direview", reviewed_txt),
+    ]
+    meta_html = "".join(f'<div><span class="k">{k}</span><span class="v">{v}</span></div>' for k, v in meta)
 
     st.markdown(
         f"""
 <div class="d-head">
   <div class="row1"><span class="no">{draft['draft_no']}</span>{pill(status)}</div>
-  <div class="meta">
-    Invoice <b>{draft['external_id']}</b> &nbsp;·&nbsp; {draft['business_date']}
-    &nbsp;·&nbsp; {branch} &nbsp;·&nbsp; engine <b>{draft.get('ai_model') or '—'}</b>
-    &nbsp;·&nbsp; confidence <b>{draft.get('confidence') if draft.get('confidence') is not None else '—'}</b>{reviewed_txt}
-  </div>
   <div class="amt">{rp(draft['total_debit'])}</div>
+  <div class="meta-grid">{meta_html}</div>
 </div>
 """,
         unsafe_allow_html=True,
@@ -785,9 +745,7 @@ def render_detail(draft: dict) -> None:
         badge = (
             '<span class="pill pill-positive">Seimbang</span>'
             if balanced
-            else '<span class="pill pill-negative">Selisih '
-            + rp(abs(diff))
-            + "</span>"
+            else '<span class="pill pill-negative">Selisih ' + rp(abs(diff)) + "</span>"
         )
         st.markdown(
             '<div class="totals">'
@@ -813,7 +771,6 @@ def render_detail(draft: dict) -> None:
             "</tr>"
             for it in items
         )
-
         st.markdown(
             '<div class="jt-wrap"><table class="jt">'
             "<thead><tr><th class='n'>#</th><th>Kode</th><th>Akun</th>"
@@ -831,10 +788,9 @@ def render_detail(draft: dict) -> None:
     else:
         st.caption("Tidak ada baris jurnal pada draft ini.")
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-
+    # Status transitions unchanged; only the column layout is simplified.
     if status == "PENDING":
-        c1, c2, c3, _ = st.columns([1, 1, 1.4, 1.9])
+        c1, c2, c3 = st.columns([1, 1, 1.3])
         with c1:
             if st.button("Approve", key="act_ok", type="primary", width="stretch"):
                 set_draft_status(draft["id"], "APPROVED", REVIEWER)
@@ -849,11 +805,9 @@ def render_detail(draft: dict) -> None:
                 st.toast(f"{info['items']} baris · {rp(info['total_debit'])}")
                 st.rerun()
     else:
-        c1, _ = st.columns([1.3, 2.7])
-        with c1:
-            if st.button("Kembalikan ke antrian", key="act_back", type="secondary", width="stretch"):
-                set_draft_status(draft["id"], "PENDING", REVIEWER)
-                st.rerun()
+        if st.button("Kembalikan ke antrian", key="act_back", type="secondary", width="stretch"):
+            set_draft_status(draft["id"], "PENDING", REVIEWER)
+            st.rerun()
 
     with st.expander("Alasan mapping"):
         st.write(draft.get("ai_reasoning") or "Belum ada catatan.")
@@ -1003,14 +957,14 @@ def page_branches() -> None:
 def page_utils() -> None:
     samples = load_samples()
 
-    with st.container(border=True):
-        st.markdown("##### Contoh transaksi")
+    with st.container(key="u_samples"):
+        st.markdown('<div class="sec-h">Contoh transaksi</div>', unsafe_allow_html=True)
         if not samples:
             st.caption("Folder `data/samples/` kosong.")
         for name, payload in samples.items():
             c1, c2 = st.columns([4, 1], vertical_alignment="center")
             with c1:
-                st.markdown(f"<div style='font-size:13px;'>{name}</div>", unsafe_allow_html=True)
+                st.markdown(f'<div class="row-name">{esc(name)}</div>', unsafe_allow_html=True)
             with c2:
                 if st.button("Muat", key=f"s_{name}", width="stretch"):
                     try:
@@ -1020,15 +974,15 @@ def page_utils() -> None:
                     except (ValueError, MappingError) as exc:
                         st.error(str(exc))
 
-    with st.container(border=True):
-        st.markdown("##### Upload JSON")
+    with st.container(key="u_upload"):
+        st.markdown('<div class="sec-h">Upload JSON</div>', unsafe_allow_html=True)
         st.caption("Payload transaksi Accurate POS. Cabang diambil dari pilihan di bawah.")
         up = st.file_uploader("File JSON", type=["json"], label_visibility="collapsed")
         opts = [b["branch_code"] for b in list_branches(active_only=True)]
         target = st.selectbox("Cabang tujuan", opts, key="up_branch") if opts else None
         if not opts:
             st.caption("Belum ada cabang aktif. Tambahkan dulu di menu Cabang.")
-        if up and st.button("Proses upload", type="primary", disabled=not target):
+        if up and st.button("Proses upload", type="primary", disabled=not target, width="stretch"):
             try:
                 payload = json.loads(up.read().decode("utf-8"))
                 payload["branch_code"] = target
@@ -1038,18 +992,19 @@ def page_utils() -> None:
             except (ValueError, MappingError, json.JSONDecodeError) as exc:
                 st.error(str(exc))
 
-    with st.container(border=True):
-        st.markdown("##### Kalkulator")
+    with st.container(key="u_calc"):
+        st.markdown('<div class="sec-h">Kalkulator</div>', unsafe_allow_html=True)
         st.caption("Hitung cepat tanpa menyimpan apa pun.")
-        with st.form("calc"):
-            c1, c2, c3 = st.columns(3)
+        with st.form("calc", border=False):
+            c1, c2 = st.columns(2)
             qty = c1.number_input("Qty", 1, 999, 1)
             price = c2.number_input("Harga satuan", 0, 100_000_000, 50_000, step=1_000)
+            c3, c4 = st.columns(2)
             disc = c3.number_input("Diskon bill", 0, 100_000_000, 0, step=1_000)
-            c4, c5 = st.columns(2)
             pb1 = c4.number_input("PB1 (%)", 0.0, 30.0, 10.0, step=0.5)
+            c5, _ = st.columns(2)
             svc = c5.number_input("Service (%)", 0.0, 30.0, 0.0, step=0.5)
-            go = st.form_submit_button("Hitung", type="primary")
+            go = st.form_submit_button("Hitung", type="primary", width="stretch")
         if go:
             payload = {
                 "invoice_no": f"SIM-{uuid.uuid4().hex[:6].upper()}",
@@ -1068,14 +1023,14 @@ def page_utils() -> None:
                 ("Kembalian", rp(res.change_due)),
             ]
             st.markdown(
-                "<table class='plain' style='margin-top:8px;'>"
+                "<table class='plain'>"
                 + "".join(f"<tr><td>{k}</td><td class='n'>{v}</td></tr>" for k, v in rows)
                 + "</table>",
                 unsafe_allow_html=True,
             )
 
-    with st.container(border=True):
-        st.markdown("##### Ekspor ke Google Drive")
+    with st.container(key="u_drive"):
+        st.markdown('<div class="sec-h">Ekspor ke Google Drive</div>', unsafe_allow_html=True)
         st.caption("Excel mingguan berisi draft APPROVED tujuh hari terakhir.")
         try:
             from app.drive_export import export_to_drive, gdrive_available
@@ -1084,7 +1039,7 @@ def page_utils() -> None:
         except Exception:  # noqa: BLE001
             drive_ok = False
         if drive_ok:
-            if st.button("Push sekarang", type="primary"):
+            if st.button("Push sekarang", type="primary", width="stretch"):
                 try:
                     out = export_to_drive(since_days=7, only_approved=True)
                     if out.get("status") == "uploaded":

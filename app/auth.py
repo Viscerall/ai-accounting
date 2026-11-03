@@ -55,8 +55,8 @@ def require_login() -> str:
     Memanggil ``st.stop()`` kalau belum login.
     """
     if is_logged_in():
-        _render_logout_sidebar()
         return st.session_state.get(_USERNAME_KEY, "Tim Dawend")
+
 
     expected = _secret("APP_PASSWORD")
 
@@ -70,8 +70,8 @@ def require_login() -> str:
         st.markdown('<div class="login-h">Masuk</div>', unsafe_allow_html=True)
         st.markdown(
             '<p class="login-p">Dashboard kolaboratif untuk review jurnal dan '
-            "operasional tim Dawend. Isi nama kamu supaya setiap approve / reject "
-            "tercatat atas nama yang benar.</p>",
+            "operasional tim Dawend. Isi nama tim atau reviewer yang bertugas; "
+            "setiap approve / reject dicatat atas nama tim.</p>",
             unsafe_allow_html=True,
         )
 
@@ -85,12 +85,14 @@ def require_login() -> str:
             st.stop()
 
         with st.form("login_form", border=False, clear_on_submit=False):
-            name = st.text_input("Nama", placeholder="Nama kamu", autocomplete="name")
+            name = st.text_input(
+                "Nama", value="Tim Dawend", autocomplete="name"
+            )
             password = st.text_input("Password", type="password", autocomplete="current-password")
             submitted = st.form_submit_button("Masuk", type="primary", width="stretch")
 
         if submitted:
-            if not name.strip():
+            if not name or not name.strip():
                 st.error("Isi nama kamu dulu.")
             elif check_password(password, expected):
                 st.session_state[_SESSION_KEY] = True
