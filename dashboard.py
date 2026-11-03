@@ -429,7 +429,9 @@ table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
 .st-key-nav_mobile_wrap, .st-key-nav_mobile_foot{ display:none; }
 
 @media (max-width:900px){
-  .st-key-nav_mobile_wrap{ display:block; padding:0 !important; }
+  /* Streamlit's block-container rule is emitted after the desktop rule;
+     reserve the fixed header explicitly so mobile nav remains clickable. */
+  .st-key-nav_mobile_wrap{ display:block; padding:0 !important; margin-top:44px !important; }
   .st-key-nav_mobile_foot{ display:block; padding:0 var(--pad) !important; }
   .mfoot{ font-size:11px; color:var(--muted); line-height:1.5; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mfoot b{ color:var(--text); font-weight:500; }
@@ -453,7 +455,15 @@ table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
   .st-key-nav_mobile_wrap label[data-testid="stRadioOption"] p{ font-size:13px; color:var(--text); margin:0; white-space:nowrap; }
   .st-key-nav_mobile_wrap label[data-testid="stRadioOption"]:has(input:checked){ background:var(--accent-soft) !important; border-color:var(--accent-track); }
   .st-key-nav_mobile_wrap label[data-testid="stRadioOption"]:has(input:checked) p{ color:var(--accent-ink); font-weight:500; }
-  [data-testid="stSidebar"] .st-key-nav_radio{ display:none; }
+  /* Keep the full sidebar out of the mobile content layer. The compact pill
+     navigation and the header opener are the mobile navigation surface. */
+  [data-testid="stSidebar"]{ display:none !important; }
+  [data-testid="stSidebarCollapseButton"]{ display:none !important; }
+  [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"]{
+    display:flex !important; visibility:visible !important; z-index:20 !important;
+  }
+  .st-key-nav_mobile_wrap{ position:relative; z-index:2; overflow-x:auto; scrollbar-width:none; -ms-overflow-style:none; -webkit-overflow-scrolling:touch; }
+  .st-key-nav_mobile_wrap::-webkit-scrollbar{ display:none; }
 
   .st-key-login{ max-width:100%; margin:6vh auto 0; padding:0 var(--s1) !important; }
   .st-key-content{ padding-top:var(--s4) !important; }
@@ -467,8 +477,25 @@ table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
   .meta-grid{ grid-template-columns:repeat(2,minmax(0,1fr)); }
   .d-head .amt{ font-size:26px; }
 
+  /* fixed mobile header must not cover the first app controls */
+  [data-testid="stMain"] .block-container,
+  [data-testid="stAppViewContainer"] .block-container{
+    padding:60px 0 0 !important;
+  }
+  header[data-testid="stHeader"]{
+    height:60px !important; min-height:60px !important;
+  }
   .st-key-topbar{ padding:0 var(--pad) !important; }
-  .st-key-topbar [data-testid="stHorizontalBlock"]{ grid-template-columns:minmax(0,1fr); gap:var(--s3) !important; min-height:0; padding:var(--s3) 0; }
+  .st-key-topbar [data-testid="stHorizontalBlock"]{
+    display:flex !important; flex-direction:column !important; align-items:stretch !important;
+    gap:var(--s3) !important; min-height:0; padding:var(--s3) 0;
+  }
+  .st-key-topbar [data-testid="stColumn"]{
+    display:block !important; width:100% !important; max-width:none !important;
+    flex:0 0 auto !important;
+  }
+  .st-key-topbar .stSelectbox{ width:100% !important; max-width:none !important; margin:0 !important; }
+  .st-key-topbar [data-baseweb="select"]{ width:100% !important; }
   .st-key-detail [data-testid="stHorizontalBlock"]{ flex-wrap:nowrap !important; gap:var(--s2) !important; }
   .st-key-detail [data-testid="stColumn"]{ min-width:0 !important; width:auto !important; flex:1 1 0 !important; }
   .st-key-detail .stButton button{ width:100%; padding:0 var(--s2); }
