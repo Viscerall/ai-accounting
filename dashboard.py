@@ -355,6 +355,7 @@ table.jt tfoot td{
 table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
 .wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
 .wrap table.jt, .wrap table.plain{ min-width:640px; }
+/* the journal table keeps its desktop shape everywhere; phones scroll it sideways */
 .jt-wrap{ width:100%; overflow-x:auto; margin-top:16px; -webkit-overflow-scrolling:touch; }
 .jt-wrap table.jt{ min-width:640px; }
 table.jt td.desc{ color:var(--muted); white-space:normal; min-width:210px; }
@@ -377,29 +378,6 @@ table.plain td.muted, table.jt td.muted{ color:var(--muted); }
 .totals .state{ display:flex; align-items:center; gap:8px; }
 table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
 
-/* responsive: table on desktop, cards on mobile */
-.only-desktop{ display:block; }
-.only-mobile{ display:none; }
-@media (max-width:760px){
-  .only-desktop{ display:none; }
-  .only-mobile{ display:block; }
-  .jt-wrap{ display:none; }
-  .jt-items .it{
-    display:grid; grid-template-columns:1fr 1fr; gap:6px 12px;
-    padding:10px 12px; border:1px solid var(--border); border-radius:var(--r-card);
-    background:var(--surface); margin-bottom:8px; align-items:center;
-  }
-  .jt-items .it > div:first-child{ grid-column:1 / -1; }
-  .jt-items .code{ font-weight:500; font-size:13px; color:var(--text); }
-  .jt-items .name{ font-size:12px; color:var(--muted); }
-  .jt-items .dr, .jt-items .cr{ display:flex; justify-content:space-between; gap:8px; }
-  .jt-items .dr .lab, .jt-items .cr .lab{ font-size:11px; color:var(--muted); }
-  .jt-items .dr .val, .jt-items .cr .val{
-    font-size:13px; font-weight:500; font-variant-numeric:tabular-nums;
-  }
-  .jt-items .cr .val{ color:var(--negative); }
-  .jt-items .desc{ grid-column:1 / -1; font-size:12px; color:var(--muted); }
-}
 
 /* ── panels for forms / secondary blocks ── */
 .panel{ background:var(--surface); border:1px solid var(--border);
@@ -836,25 +814,8 @@ def render_detail(draft: dict) -> None:
             for it in items
         )
 
-        cards = "".join(
-            "<div class='it'>"
-            f"<div><span class='code'>{it['account_code']}</span>"
-            f" <span class='name'>{it['account_name']}</span></div>"
-            f"<div class='dr'><span class='lab'>Debit</span>"
-            f"<span class='val'>{rp(it['debit']) if it.get('debit') else '—'}</span></div>"
-            f"<div class='cr'><span class='lab'>Kredit</span>"
-            f"<span class='val'>{rp(it['credit']) if it.get('credit') else '—'}</span></div>"
-            f"<div class='desc'>{it.get('description') or '—'}</div>"
-            "</div>"
-            for it in items
-        )
-
         st.markdown(
-            '<div class="jt-items only-mobile">' + cards + "</div>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="jt-wrap only-desktop"><table class="jt">'
+            '<div class="jt-wrap"><table class="jt">'
             "<thead><tr><th class='n'>#</th><th>Kode</th><th>Akun</th>"
             "<th class='n'>Debit</th><th class='n'>Kredit</th><th>Keterangan</th></tr></thead>"
             f"<tbody>{body}</tbody>"
