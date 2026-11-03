@@ -119,6 +119,17 @@ def radio_default(key: str, options: list, default):
         st.session_state[key] = default
 
 
+def _set_page(source_key: str) -> None:
+    """Keep the desktop sidebar nav and the mobile top nav in sync."""
+    page = st.session_state.get(source_key)
+    if page is None:
+        return
+    st.session_state["page"] = page
+    other = "nav_mobile" if source_key == "nav_radio" else "nav_radio"
+    if st.session_state.get(other) != page:
+        st.session_state[other] = page
+
+
 # ── CSS ─────────────────────────────────────────────────────────────────────
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap');
@@ -136,10 +147,23 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"]{
   -webkit-font-smoothing:antialiased;
 }
 [data-testid="stAppViewContainer"]{ background:var(--ground); color:var(--text); }
-#MainMenu, footer, header[data-testid="stHeader"]{ display:none !important; }
+#MainMenu, footer{ display:none !important; }
 [data-testid="stToolbar"]{ display:none !important; }
 [data-testid="stDecoration"]{ display:none !important; }
 [data-testid="stStatusWidget"]{ display:none !important; }
+/* The app header also hosts the sidebar toggle. Hide it on desktop only —
+   on phones it is the only way to open the menu. */
+@media (min-width:901px){
+  header[data-testid="stHeader"]{ display:none !important; }
+}
+@media (max-width:900px){
+  header[data-testid="stHeader"]{
+    display:block !important; background:transparent !important;
+    box-shadow:none !important; height:auto !important;
+  }
+  [data-testid="stSidebarCollapsedControl"]{ display:flex !important; visibility:visible !important; }
+  [data-testid="stSidebarCollapsedControl"] button{ color:var(--accent) !important; }
+}
 
 /* ── frame: no global padding, we pad ourselves ── */
 [data-testid="stMain"] .block-container,
@@ -218,15 +242,25 @@ code, .mono{ font-variant-numeric:tabular-nums; }
 /* ── content ── */
 .st-key-content{ padding:22px var(--pad) 40px !important; }
 
-/* ── KPI container: one panel, 1px dividers ── */
-.kpis{ display:flex; background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--r-card); overflow:hidden; margin:0 0 22px; }
-.kpi{ flex:1; padding:14px 18px 15px; border-right:1px solid var(--rule); min-width:0; }
+/* ── KPI container: one panel, equal cells, 1px dividers ── */
+.kpis{
+  display:grid; grid-template-columns:repeat(4, minmax(0,1fr));
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--r-card); overflow:hidden; margin:0 0 22px;
+}
+.kpi{
+  display:flex; flex-direction:column; justify-content:center;
+  padding:14px 18px 15px; border-right:1px solid var(--rule); min-width:0;
+}
 .kpi:last-child{ border-right:0; }
-.kpi .lab{ font-size:12px; color:var(--muted); margin-bottom:5px; }
-.kpi .val{ font-size:24px; font-weight:500; letter-spacing:-0.02em; font-variant-numeric:tabular-nums; line-height:1.15; }
+.kpi .lab{ font-size:12px; color:var(--muted); margin-bottom:5px; line-height:1.35; }
+.kpi .val{
+  font-size:24px; font-weight:500; letter-spacing:-0.02em;
+  font-variant-numeric:tabular-nums; line-height:1.15;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
 .kpi .val.hue{ color:var(--accent); }
-.kpi .cap{ font-size:12px; color:var(--muted); margin-top:4px; }
+.kpi .cap{ font-size:12px; color:var(--muted); margin-top:4px; line-height:1.35; }
 
 /* ── status tabs (underline, 2px indicator) ── */
 .st-key-status_tabs [data-testid="stRadio"] > label{ display:none; }
@@ -319,9 +353,16 @@ table.jt tfoot td{
   border-top:1px solid var(--border); border-bottom:0; background:var(--surface);
 }
 table.jt tfoot td:first-child{ color:var(--muted); font-weight:400; }
-.jt-wrap{ width:100%; overflow-x:auto; margin-top:16px; }
-.jt-wrap table.jt{ min-width:620px; }
+.wrap{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.wrap table.jt, .wrap table.plain{ min-width:640px; }
+.jt-wrap{ width:100%; overflow-x:auto; margin-top:16px; -webkit-overflow-scrolling:touch; }
+.jt-wrap table.jt{ min-width:640px; }
 table.jt td.desc{ color:var(--muted); white-space:normal; min-width:210px; }
+table.plain td.muted, table.jt td.muted{ color:var(--muted); }
+.table-cap{
+  font-size:12px; color:var(--muted); display:flex; justify-content:space-between;
+  align-items:baseline; gap:12px; margin:0 0 8px;
+}
 
 /* totals strip above the table: always visible, no scrolling needed */
 .totals{
@@ -335,6 +376,30 @@ table.jt td.desc{ color:var(--muted); white-space:normal; min-width:210px; }
 .totals .val{ font-size:18px; font-weight:500; font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
 .totals .state{ display:flex; align-items:center; gap:8px; }
 table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
+
+/* responsive: table on desktop, cards on mobile */
+.only-desktop{ display:block; }
+.only-mobile{ display:none; }
+@media (max-width:760px){
+  .only-desktop{ display:none; }
+  .only-mobile{ display:block; }
+  .jt-wrap{ display:none; }
+  .jt-items .it{
+    display:grid; grid-template-columns:1fr 1fr; gap:6px 12px;
+    padding:10px 12px; border:1px solid var(--border); border-radius:var(--r-card);
+    background:var(--surface); margin-bottom:8px; align-items:center;
+  }
+  .jt-items .it > div:first-child{ grid-column:1 / -1; }
+  .jt-items .code{ font-weight:500; font-size:13px; color:var(--text); }
+  .jt-items .name{ font-size:12px; color:var(--muted); }
+  .jt-items .dr, .jt-items .cr{ display:flex; justify-content:space-between; gap:8px; }
+  .jt-items .dr .lab, .jt-items .cr .lab{ font-size:11px; color:var(--muted); }
+  .jt-items .dr .val, .jt-items .cr .val{
+    font-size:13px; font-weight:500; font-variant-numeric:tabular-nums;
+  }
+  .jt-items .cr .val{ color:var(--negative); }
+  .jt-items .desc{ grid-column:1 / -1; font-size:12px; color:var(--muted); }
+}
 
 /* ── panels for forms / secondary blocks ── */
 .panel{ background:var(--surface); border:1px solid var(--border);
@@ -407,14 +472,70 @@ table.plain td.code{ font-weight:500; font-variant-numeric:tabular-nums; }
 .login-p{ font-size:13px; color:var(--muted); margin:0 0 20px; line-height:1.6; }
 .login-f{ font-size:12px; color:var(--muted); margin-top:18px; line-height:1.6; }
 
+/* ── mobile top nav (phones only): mirrors the sidebar menu ── */
+.st-key-nav_mobile_wrap{ display:none; }
+.st-key-nav_mobile_foot{ display:none; }
+@media (max-width:900px){
+  .st-key-nav_mobile_wrap{ display:block; padding:0 12px !important; }
+  .st-key-nav_mobile_foot{ display:block; padding:0 12px !important; }
+  .mfoot{ font-size:11px; color:var(--muted); line-height:1.5; padding:2px 0; }
+  .mfoot b{ color:var(--text); font-weight:500; }
+  .st-key-nav_mobile_foot .stButton button{
+    height:28px; font-size:12px; background:var(--surface);
+    border:1px solid var(--border); color:var(--muted);
+  }
+  .st-key-nav_mobile_wrap [data-testid="stRadio"] > label{ display:none; }
+  .st-key-nav_mobile_wrap [role="radiogroup"]{
+    display:flex; gap:6px; overflow-x:auto; scrollbar-width:none;
+    padding:10px 0 10px; margin:0; border-bottom:1px solid var(--rule);
+  }
+  .st-key-nav_mobile_wrap [role="radiogroup"]::-webkit-scrollbar{ display:none; }
+  .st-key-nav_mobile_wrap label[data-baseweb="radio"]{
+    flex:0 0 auto; height:32px; padding:0 12px; margin:0; border-radius:999px;
+    background:var(--surface) !important; border:1px solid var(--border);
+    display:flex; align-items:center; cursor:pointer;
+  }
+  .st-key-nav_mobile_wrap label[data-baseweb="radio"] > div:first-child{ display:none !important; }
+  .st-key-nav_mobile_wrap label[data-baseweb="radio"] p{ font-size:13px; color:var(--text); margin:0; }
+  .st-key-nav_mobile_wrap label[data-baseweb="radio"]:has(input:checked){
+    background:var(--accent-soft) !important; border-color:var(--accent-track);
+  }
+  .st-key-nav_mobile_wrap label[data-baseweb="radio"]:has(input:checked) p{
+    color:var(--accent-ink); font-weight:500;
+  }
+  /* sidebar menu stays desktop-only; phones use the pill nav above */
+  [data-testid="stSidebar"] .st-key-nav_radio{ display:none; }
+  .st-key-login{ max-width:100%; margin:6vh auto 0; padding:0 4px !important; }
+}
+
 /* ── phone ── */
 @media (max-width:900px){
-  .kpis{ flex-wrap:wrap; }
-  .kpi{ flex:1 1 50%; border-bottom:1px solid var(--rule); }
+  .kpis{ grid-template-columns:repeat(2, minmax(0,1fr)); margin-bottom:18px; }
+  .kpi{ padding:12px 13px; min-height:88px; border-bottom:1px solid var(--rule); }
   .kpi:nth-child(2n){ border-right:0; }
-  .st-key-content{ padding:16px 16px 32px !important; }
-  .st-key-topbar{ padding:0 16px !important; }
-  .st-key-topbar [data-testid="stHorizontalBlock"]{ height:auto; padding:10px 0; }
+  .kpi:nth-child(n+3){ border-bottom:0; }
+  .kpi .val{ font-size:20px; }
+  .kpi .cap{ font-size:11px; }
+  .st-key-content{ padding:14px 12px 28px !important; }
+  .st-key-topbar{ padding:0 12px !important; }
+  .st-key-topbar [data-testid="stHorizontalBlock"]{ height:auto; padding:8px 0 10px; gap:8px; }
+  .st-key-topbar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child{ min-width:0; }
+  .st-key-topbar .tb-title{ font-size:16px; }
+  .st-key-topbar .tb-sub{ font-size:11px; }
+  .st-key-topbar .stSelectbox{ min-width:0; }
+  .st-key-topbar [data-baseweb="select"] > div{ max-width:145px; }
+  .st-key-status_tabs [role="radiogroup"]{ overflow-x:auto; scrollbar-width:none; }
+  .st-key-status_tabs label[data-baseweb="radio"]{ flex:0 0 auto; margin-right:18px; }
+  .st-key-rail{ margin-bottom:16px; }
+  .st-key-rail_radio label[data-baseweb="radio"]{ min-height:42px; }
+  .totals .cell{ min-width:50%; padding:11px 12px; }
+  .totals .cell:nth-child(2){ border-right:0; }
+  .totals .cell:nth-child(1), .totals .cell:nth-child(2){ border-bottom:1px solid var(--rule); }
+  .totals .val{ font-size:16px; }
+  .jt-wrap{ margin-top:12px; }
+  .d-head .amt{ font-size:25px; }
+  .d-head .meta{ font-size:11px; line-height:1.6; }
+  .st-key-detail .stButton button{ width:100%; }
 }
 """
 
@@ -435,7 +556,7 @@ NAV = [
 def render_sidebar(reviewer: str = "Tim Dawend") -> str:
     with st.sidebar:
         st.markdown(
-            '<div class="brand"><div class="mark">A</div>'
+            '<div class="brand"><div class="mark">D</div>'
             '<div><div class="name">Dawend</div>'
             '<div class="scope">Accounting Dashboard</div></div></div>',
             unsafe_allow_html=True,
@@ -452,8 +573,14 @@ def render_sidebar(reviewer: str = "Tim Dawend") -> str:
             key="nav_radio",
             label_visibility="collapsed",
             width="stretch",
+            on_change=_set_page,
+            args=("nav_radio",),
         )
-        active = st.session_state.get("nav_radio", keys[0])
+        active = st.session_state.get("page", st.session_state.get("nav_radio", keys[0]))
+
+        # Sidebar is the canonical desktop navigation; mobile gets a compact
+        # duplicate rendered in the main content area below.
+        st.session_state["page"] = active
 
         st.markdown('<div class="side-foot">', unsafe_allow_html=True)
         st.markdown(
@@ -473,6 +600,38 @@ def render_sidebar(reviewer: str = "Tim Dawend") -> str:
 
 
 # ── top bar ─────────────────────────────────────────────────────────────────
+def render_mobile_nav(reviewer: str = "Tim Dawend") -> None:
+    """Compact nav for phones — the sidebar is hidden by CSS under 900px."""
+    keys = [k for k, _ in NAV]
+    labels = dict(NAV)
+    radio_default("nav_mobile", keys, st.session_state.get("page", keys[0]))
+
+    with st.container(key="nav_mobile_wrap"):
+        st.radio(
+            "Menu",
+            keys,
+            format_func=lambda k: labels[k],
+            key="nav_mobile",
+            horizontal=True,
+            label_visibility="collapsed",
+            on_change=_set_page,
+            args=("nav_mobile",),
+        )
+
+    with st.container(key="nav_mobile_foot"):
+        left, right = st.columns([3, 1], vertical_alignment="center")
+        with left:
+            st.markdown(
+                f'<div class="mfoot">Reviewer <b>{reviewer}</b>'
+                f' &nbsp;·&nbsp; DB <b>{db_label()}</b></div>',
+                unsafe_allow_html=True,
+            )
+        with right:
+            if st.button("Keluar", key="logout_m", width="stretch"):
+                logout()
+                st.rerun()
+
+
 TITLES = {
     "review": ("Review jurnal", "Draft jurnal harian yang menunggu keputusan"),
     "coa": ("Buku besar", "Chart of accounts yang dipakai mapping"),
@@ -676,8 +835,26 @@ def render_detail(draft: dict) -> None:
             "</tr>"
             for it in items
         )
+
+        cards = "".join(
+            "<div class='it'>"
+            f"<div><span class='code'>{it['account_code']}</span>"
+            f" <span class='name'>{it['account_name']}</span></div>"
+            f"<div class='dr'><span class='lab'>Debit</span>"
+            f"<span class='val'>{rp(it['debit']) if it.get('debit') else '—'}</span></div>"
+            f"<div class='cr'><span class='lab'>Kredit</span>"
+            f"<span class='val'>{rp(it['credit']) if it.get('credit') else '—'}</span></div>"
+            f"<div class='desc'>{it.get('description') or '—'}</div>"
+            "</div>"
+            for it in items
+        )
+
         st.markdown(
-            '<div class="jt-wrap"><table class="jt">'
+            '<div class="jt-items only-mobile">' + cards + "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="jt-wrap only-desktop"><table class="jt">'
             "<thead><tr><th class='n'>#</th><th>Kode</th><th>Akun</th>"
             "<th class='n'>Debit</th><th class='n'>Kredit</th><th>Keterangan</th></tr></thead>"
             f"<tbody>{body}</tbody>"
@@ -989,7 +1166,9 @@ def main() -> None:
                 st.rerun()
         st.stop()
 
+    # Render both navigation surfaces: sidebar for desktop, compact pills for phones.
     page = render_sidebar(REVIEWER)
+    render_mobile_nav(REVIEWER)
     branches = [b for b in list_branches() if b["is_active"]]
     branch_code = render_topbar(page, branches, st.session_state.get("branch_code"))
 
