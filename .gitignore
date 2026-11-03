@@ -29,3 +29,8 @@ logs/*.log
 Thumbs.db
 desktop.ini
 .taste-skill/
+
+# === Screenshot artefak lokal ===
+/screenshots/
+mobile-fix-*.png
+dawend-*.png
